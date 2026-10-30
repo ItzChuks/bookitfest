@@ -1,1 +1,72 @@
-# bookitfest
+# Bookitfest
+
+Multivendor event ticketing + Lucky 5 draw. HTML, CSS, Tailwind (CDN), JavaScript (ES modules) and PocketBase.
+Frontend is plain static files at the project root. PocketBase lives in `backend/`.
+
+## Structure
+
+```
+index.html events.html event.html lucky.html wallet.html vendor.html admin.html 404.html   one file per page
+assets/
+  css/app.css            extra styles
+  img/                   placeholder image
+  js/
+    config.js            PocketBase URL + NGN rate  <- the only file you edit to deploy
+    tailwind.config.js   Tailwind theme
+    app.js               entry: loads pages/<data-page>.js, gates by role, renders
+    pb.js state.js ui.js components.js layout.js audio.js    shared modules
+    pages/               home, events, event, lucky, wallet, vendor, admin, notfound
+backend/
+  pb_hooks/              server logic (tickets, wallet, Lucky 5, draw, check-in)
+  pb_migrations/         schema + access rules
+  start-demo.bat / .sh   start PocketBase with demo data
+```
+
+Links are plain relative files (`events.html`, `event.html?id=...`), so there is no router and no server rewrite.
+
+## Run locally (Live Server)
+
+1. Download PocketBase 0.23+ from https://pocketbase.io/docs and put the executable in `backend/`.
+2. In `backend/`: `./pocketbase superuser upsert you@example.com a-long-password`
+3. Start it with demo data: `start-demo.bat` (Windows) or `./start-demo.sh`. It runs on http://127.0.0.1:8090
+4. Open the project root in VS Code and click **Go Live**. Open `index.html`.
+
+`config.js` uses `http://127.0.0.1:8090` automatically on localhost.
+
+Demo logins (password `Passw0rd!demo`): `user@bookitfest.test` (has $1,250), `vendor@bookitfest.test`, `admin@bookitfest.test`.
+
+## Deploy
+
+**Frontend (Vercel):** import the repo, framework preset "Other", no build command, output directory = project root. Nothing else needed.
+
+**Backend:** Vercel cannot run PocketBase. Host it on a VPS, Fly.io, Railway or similar (needs a persistent disk), upload `backend/pb_hooks` and `backend/pb_migrations`, and start it **without** `BKF_DEMO` / `BKF_SIMULATE_PAYMENTS`.
+Then set `PROD_PB_URL` in `assets/js/config.js` to that HTTPS URL. PocketBase allows cross-origin requests by default; restrict origins with `--origins` once you know your Vercel domain.
+
+To make someone an admin, open `<your-pocketbase>/_/` > users and set `role` to `admin`.
+
+## Notes
+
+- Money logic (balances, tickets, Lucky 5, draws, check-in) is server-side only, in `backend/pb_hooks/`. Browser writes to those collections are rejected by the rules.
+- **Stripe is live** (hosted Checkout, see below). Paystack is still simulated only when `BKF_SIMULATE_PAYMENTS=1`; it gets wired in next.
+- Before launch: HTTPS, SMTP in the PocketBase settings, review rate limits. Check that a paid prize draw is legal where you operate.
+
+## Stripe setup
+
+Ticket purchases and wallet top-ups use Stripe Checkout. The amount is always calculated on the server, and tickets / balance are only credited after Stripe confirms payment (verified webhook, with a return-page confirm as backup). The secret key never goes in the frontend or the repo.
+
+**1. Railway variables** (service > Variables), then redeploy:
+
+| Variable | Value |
+|---|---|
+| `STRIPE_SECRET_KEY` | your `sk_live_...` secret key |
+| `STRIPE_WEBHOOK_SECRET` | the `whsec_...` signing secret of the webhook below |
+| `BKF_FRONTEND_URL` | your site URL, e.g. `https://your-site.vercel.app` (no trailing slash) |
+
+**2. Stripe Dashboard > Developers > Webhooks > Add endpoint**
+
+- URL: `https://bookitfest-production.up.railway.app/api/bkf/stripe/webhook`
+- Events: `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`, `checkout.session.expired`
+
+**3. Push** the new files. The migration `1760000001_payments.js` creates a `payments` collection automatically on boot (server-only, no public access).
+
+Payments are charged in USD. Test first with `sk_test_...` keys and a test-mode webhook (card `4242 4242 4242 4242`), then switch to live keys.
