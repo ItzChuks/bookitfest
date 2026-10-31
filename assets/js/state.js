@@ -11,7 +11,7 @@ export const bus = {
 export const state = {
   currency: localStorage.getItem('bkf_currency') === 'NGN' ? 'NGN' : 'USD',
   sound: localStorage.getItem('bkf_sound') !== 'off',
-  config: { luckyFeeUSD: 10, maxTicketsPerOrder: 10, simulatedPayments: false, stripeEnabled: false },
+  config: { luckyFeeUSD: 10, maxTicketsPerOrder: 10, simulatedPayments: false, flutterwaveEnabled: false },
   serverOk: true,
 }
 

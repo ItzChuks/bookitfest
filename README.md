@@ -46,27 +46,32 @@ To make someone an admin, open `<your-pocketbase>/_/` > users and set `role` to 
 
 ## Notes
 
+- Event cover images are uploaded from the vendor's device (max 5 MB, JPG/PNG/WebP/GIF) and stored by PocketBase in `pb_data/storage`. On Railway keep the volume mounted at `/pb/pb_data` or uploads are lost on redeploy.
+
 - Money logic (balances, tickets, Lucky 5, draws, check-in) is server-side only, in `backend/pb_hooks/`. Browser writes to those collections are rejected by the rules.
-- **Stripe is live** (hosted Checkout, see below). Paystack is still simulated only when `BKF_SIMULATE_PAYMENTS=1`; it gets wired in next.
+- **Flutterwave is live** (hosted checkout, see below). Paystack is still simulated only when `BKF_SIMULATE_PAYMENTS=1`; it gets wired in next.
 - Before launch: HTTPS, SMTP in the PocketBase settings, review rate limits. Check that a paid prize draw is legal where you operate.
 
-## Stripe setup
+## Flutterwave setup
 
-Ticket purchases and wallet top-ups use Stripe Checkout. The amount is always calculated on the server, and tickets / balance are only credited after Stripe confirms payment (verified webhook, with a return-page confirm as backup). The secret key never goes in the frontend or the repo.
+Ticket purchases and wallet top-ups use Flutterwave's hosted checkout (cards, bank transfer, USSD). The amount is calculated on the server, and tickets / balance are only credited after the server verifies the transaction with Flutterwave (webhook, with a return-page check as backup). The secret key never goes in the frontend or the repo.
 
 **1. Railway variables** (service > Variables), then redeploy:
 
 | Variable | Value |
 |---|---|
-| `STRIPE_SECRET_KEY` | your `sk_live_...` secret key |
-| `STRIPE_WEBHOOK_SECRET` | the `whsec_...` signing secret of the webhook below |
+| `FLW_SECRET_KEY` | your Flutterwave secret key (`FLWSECK_TEST-...` to test, `FLWSECK-...` live) |
+| `FLW_SECRET_HASH` | any long random string you invent; use the same value in the dashboard |
 | `BKF_FRONTEND_URL` | your site URL, e.g. `https://your-site.vercel.app` (no trailing slash) |
+| `FLW_CURRENCY` | optional, default `NGN` (use `USD` only if USD is enabled on your account) |
+| `FLW_NGN_RATE` | optional, default `1500`; keep equal to `NGN_RATE` in `assets/js/config.js` |
 
-**2. Stripe Dashboard > Developers > Webhooks > Add endpoint**
+**2. Flutterwave Dashboard > Settings > Webhooks**
 
-- URL: `https://bookitfest-production.up.railway.app/api/bkf/stripe/webhook`
-- Events: `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`, `checkout.session.expired`
+- URL: `https://bookitfest-production.up.railway.app/api/bkf/flw/webhook`
+- Secret hash: the same value as `FLW_SECRET_HASH`
+- Enable the charge/transaction completed events.
 
 **3. Push** the new files. The migration `1760000001_payments.js` creates a `payments` collection automatically on boot (server-only, no public access).
 
-Payments are charged in USD. Test first with `sk_test_...` keys and a test-mode webhook (card `4242 4242 4242 4242`), then switch to live keys.
+Prices are stored in USD and charged in NGN at `FLW_NGN_RATE` by default. Test first with test keys, then switch to live keys.

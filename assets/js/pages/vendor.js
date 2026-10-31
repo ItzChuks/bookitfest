@@ -25,7 +25,12 @@ export default {
             <option value="Music Festival">Music Festival / Concert</option><option value="Tech Conference">Tech Conference / Expo</option><option value="Cultural Fair">Cultural Fair / Food Fest</option><option value="Sports & Gaming">Sports & Gaming Tournament</option></select></div>
           <div><label class="block text-xs font-bold text-gray-700 mb-1" for="v-date">Date & Time *</label><input class="field" type="datetime-local" id="v-date" required></div>
           <div><label class="block text-xs font-bold text-gray-700 mb-1" for="v-loc">Location / Venue *</label><input class="field" id="v-loc" required maxlength="200" placeholder="e.g. Landmark Beach Front, Victoria Island"></div></div>
-        <div><label class="block text-xs font-bold text-gray-700 mb-1" for="v-img">Cover Banner Image URL</label><input class="field" type="url" id="v-img" placeholder="https://images.unsplash.com/..."></div>
+        <div><span class="block text-xs font-bold text-gray-700 mb-1">Cover Banner Image</span>
+          <input type="file" id="v-img" accept="image/jpeg,image/png,image/webp,image/gif" class="sr-only">
+          <label for="v-img" id="v-drop" class="flex flex-col items-center justify-center gap-1 border-2 border-dashed border-gray-300 hover:border-red-400 hover:bg-red-50/40 rounded-2xl px-4 py-8 text-center cursor-pointer transition">
+            <i class="fas fa-cloud-upload-alt text-2xl text-red-500"></i><span class="text-xs font-bold text-gray-800">Tap to upload from your device</span><span class="text-[11px] text-gray-400">JPG, PNG, WebP or GIF, up to 5 MB</span></label>
+          <div id="v-prev" class="hidden mt-3 relative rounded-2xl overflow-hidden border border-gray-200 bg-gray-50"><img id="v-prev-img" alt="Cover preview" class="w-full h-48 object-cover">
+            <button type="button" id="v-prev-x" class="absolute top-2 right-2 bg-black/60 hover:bg-black/80 text-white text-xs font-bold px-3 py-1.5 rounded-lg"><i class="fas fa-times mr-1"></i>Remove</button></div></div>
         <div><label class="block text-xs font-bold text-gray-700 mb-1" for="v-desc">Description</label><textarea class="field" id="v-desc" rows="3" maxlength="4000" placeholder="What should people know before they buy?"></textarea></div>
         <div class="bg-gray-50 p-4 sm:p-5 rounded-2xl border border-gray-200 space-y-4">
           <div class="flex flex-wrap items-center justify-between gap-1"><h3 class="text-xs font-extrabold text-gray-900 uppercase tracking-wider">3-Tier Ticket Pricing (<span class="text-red-600" id="v-cur">${currencyLabel()}</span>)</h3><span class="text-[10px] text-gray-400 font-bold">Enter amounts in the selected currency</span></div>
@@ -73,6 +78,17 @@ export default {
     }
 
     const form = $('#v-form', root)
+    const imgIn = $('#v-img', root), prev = $('#v-prev', root), prevImg = $('#v-prev-img', root), drop = $('#v-drop', root)
+    const clearImg = () => { imgIn.value = ''; if (prevImg.src.startsWith('blob:')) URL.revokeObjectURL(prevImg.src); prevImg.removeAttribute('src'); prev.classList.add('hidden'); drop.classList.remove('hidden') }
+    imgIn.onchange = () => {
+      const f = imgIn.files[0]; const err = $('#v-err', root); err.classList.add('hidden')
+      if (!f) return clearImg()
+      if (!/^image\/(jpeg|png|webp|gif)$/.test(f.type)) { clearImg(); err.textContent = 'Please choose a JPG, PNG, WebP or GIF image.'; return err.classList.remove('hidden') }
+      if (f.size > 5 * 1024 * 1024) { clearImg(); err.textContent = 'That image is over 5 MB. Choose a smaller one.'; return err.classList.remove('hidden') }
+      prevImg.src = URL.createObjectURL(f); prev.classList.remove('hidden'); drop.classList.add('hidden')
+    }
+    $('#v-prev-x', root).onclick = clearImg
+    form.addEventListener('reset', () => setTimeout(clearImg))
     form.onsubmit = async (ev) => {
       ev.preventDefault()
       const err = $('#v-err', root); err.classList.add('hidden')
@@ -82,11 +98,15 @@ export default {
       if (!(when > new Date())) { err.textContent = 'Pick a date and time in the future.'; return err.classList.remove('hidden') }
       const btn = $('button[type=submit]', form); setBusy(btn, true, 'Submitting…')
       try {
-        await pb.collection('events').create({
+        const fd = new FormData()
+        const price = (v) => String(+v.toFixed(2))
+        Object.entries({
           title: $('#v-title', root).value.trim(), category: $('#v-cat', root).value, starts_at: when.toISOString().replace('T', ' '),
-          location: $('#v-loc', root).value.trim(), image_url: $('#v-img', root).value.trim(), description: $('#v-desc', root).value.trim(),
-          vendor: me().id, status: 'pending', price_early: +prices[0].toFixed(2), price_regular: +prices[1].toFixed(2), price_vip: +prices[2].toFixed(2),
-        })
+          location: $('#v-loc', root).value.trim(), description: $('#v-desc', root).value.trim(),
+          vendor: me().id, status: 'pending', price_early: price(prices[0]), price_regular: price(prices[1]), price_vip: price(prices[2]),
+        }).forEach(([k, v]) => fd.append(k, v))
+        if (imgIn.files[0]) fd.append('image', imgIn.files[0])
+        await pb.collection('events').create(fd)
         form.reset(); toast('Event submitted. It is now pending admin approval.'); bus.emit('pending'); load()
       } catch (e) { err.textContent = errMsg(e); err.classList.remove('hidden') }
       setBusy(btn, false)

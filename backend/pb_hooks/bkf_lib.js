@@ -14,7 +14,7 @@ function money(n) { return Math.round(Number(n) * 100) / 100 }
 function int(n) { n = Math.floor(Number(n)); return isFinite(n) && n > 0 ? n : 0 }
 
 // Gateways other than the in-app wallet are simulated until a real provider
-// (Paystack / Stripe) is wired in. They only work when this env var is set.
+// (Paystack / Flutterwave) is wired in. They only work when this env var is set.
 function simulatedPaymentsEnabled() { return $os.getenv("BKF_SIMULATE_PAYMENTS") === "1" }
 
 function randomCode(prefix) {
@@ -116,7 +116,7 @@ function seedDemo(app) {
 }
 
 // ---------------------------------------------------------------------------
-// Tickets (shared by wallet purchases and Stripe fulfilment)
+// Tickets (shared by wallet purchases and Flutterwave fulfilment)
 // ---------------------------------------------------------------------------
 // o = { userId, event, qty:{early,regular,vip}, price:{early,regular,vip}, name, email, method, total }
 function issueTickets(tx, o) {
@@ -151,41 +151,37 @@ function issueTickets(tx, o) {
 }
 
 // ---------------------------------------------------------------------------
-// Stripe (hosted Checkout). Secrets come from environment variables only:
-//   STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, BKF_FRONTEND_URL
+// Flutterwave (v3 Standard hosted checkout). Secrets come from environment variables only:
+//   FLW_SECRET_KEY, FLW_SECRET_HASH (webhook), BKF_FRONTEND_URL
+//   optional: FLW_CURRENCY (default NGN), FLW_NGN_RATE (default 1500, keep equal to NGN_RATE in config.js)
 // ---------------------------------------------------------------------------
-function stripeKey() { return ($os.getenv("STRIPE_SECRET_KEY") || "").trim() }
-function stripeEnabled() { return stripeKey() !== "" }
+function flwKey() { return ($os.getenv("FLW_SECRET_KEY") || "").trim() }
+function flwEnabled() { return flwKey() !== "" }
+function flwCurrency() { return ($os.getenv("FLW_CURRENCY") || "NGN").trim().toUpperCase() }
 
-// Stripe wants application/x-www-form-urlencoded with bracketed nested keys.
-function formEncode(obj) {
-  const out = []
-  const walk = (prefix, v) => {
-    if (v === null || v === undefined) return
-    if (Array.isArray(v)) v.forEach((x, i) => walk(`${prefix}[${i}]`, x))
-    else if (typeof v === "object") Object.keys(v).forEach((k) => walk(prefix ? `${prefix}[${k}]` : k, v[k]))
-    else out.push(encodeURIComponent(prefix) + "=" + encodeURIComponent(String(v)))
-  }
-  walk("", obj)
-  return out.join("&")
+// Converts a USD amount into what the customer is actually charged.
+function flwChargeAmount(usd) {
+  if (flwCurrency() === "USD") return money(usd)
+  const rate = Number($os.getenv("FLW_NGN_RATE")) || 1500
+  return Math.round(usd * rate * 100) / 100
 }
 
-function stripeRequest(method, path, params) {
+function flwRequest(method, path, body) {
   const res = $http.send({
-    url: "https://api.stripe.com/v1" + path,
+    url: "https://api.flutterwave.com/v3" + path,
     method: method,
-    headers: { "Authorization": "Bearer " + stripeKey(), "Content-Type": "application/x-www-form-urlencoded" },
-    body: params ? formEncode(params) : "",
+    headers: { "Authorization": "Bearer " + flwKey(), "Content-Type": "application/json" },
+    body: body ? JSON.stringify(body) : "",
     timeout: 30,
   })
-  if (res.statusCode < 200 || res.statusCode >= 300) {
-    const msg = (res.json && res.json.error && res.json.error.message) || ("HTTP " + res.statusCode)
-    throw new Error("Stripe: " + msg)
+  if (res.statusCode < 200 || res.statusCode >= 300 || !res.json || res.json.status !== "success") {
+    const msg = (res.json && res.json.message) || ("HTTP " + res.statusCode)
+    throw new Error("Flutterwave: " + msg)
   }
   return res.json
 }
 
-// Where Stripe sends the buyer back to. Prefer the fixed BKF_FRONTEND_URL.
+// Where Flutterwave sends the buyer back to. Prefer the fixed BKF_FRONTEND_URL.
 function frontendOrigin(clientOrigin) {
   const fixed = ($os.getenv("BKF_FRONTEND_URL") || "").trim().replace(/\/+$/, "")
   if (fixed) return fixed
@@ -194,30 +190,21 @@ function frontendOrigin(clientOrigin) {
   return o
 }
 
-// Verifies the Stripe-Signature header (HMAC-SHA256 of "<t>.<raw body>").
-function verifyStripeSignature(raw, header, secret) {
-  if (!header || !secret) return false
-  let t = "", sigs = []
-  String(header).split(",").forEach((part) => {
-    const i = part.indexOf("=")
-    if (i < 0) return
-    const k = part.slice(0, i).trim(), v = part.slice(i + 1).trim()
-    if (k === "t") t = v
-    else if (k === "v1") sigs.push(v)
-  })
-  if (!t || !sigs.length) return false
-  if (Math.abs(Math.floor(Date.now() / 1000) - Number(t)) > 300) return false
-  const expected = $security.hs256(`${t}.${raw}`, secret)
-  return sigs.some((s) => $security.equal(s, expected))
+// Asks Flutterwave for the real state of a transaction (never trust the browser or the webhook body).
+function flwVerify(transactionId, reference) {
+  const r = transactionId
+    ? flwRequest("GET", "/transactions/" + encodeURIComponent(transactionId) + "/verify")
+    : flwRequest("GET", "/transactions/verify_by_reference?tx_ref=" + encodeURIComponent(reference))
+  return r.data || null
 }
 
-// Marks a Stripe Checkout session as paid and delivers what was bought.
-// Safe to call many times (webhook + return-page confirm): only the first call acts.
-function fulfillStripeSession(app, session) {
+// Delivers what was bought once Flutterwave confirms payment. `data` is the VERIFIED
+// transaction from flwVerify. Safe to call many times (webhook + return page): only the first call acts.
+function fulfillFlutterwave(app, reference, data) {
   let out = { status: "pending" }
   app.runInTransaction((tx) => {
     let p
-    try { p = tx.findFirstRecordByFilter("payments", "session_id = {:s}", { s: session.id }) }
+    try { p = tx.findFirstRecordByFilter("payments", "reference = {:r}", { r: reference }) }
     catch (_) { out = { status: "unknown" }; return }
     const kind = p.getString("kind")
     const prior = p.getString("status")
@@ -227,27 +214,29 @@ function fulfillStripeSession(app, session) {
       out = Object.assign({ status: prior, kind: kind }, result)
       return
     }
-    if (session.payment_status !== "paid") { out = { status: "pending", kind: kind }; return }
-    if (Number(session.amount_total) !== Math.round(p.getFloat("amount") * 100)) {
+    if (!data) { out = { status: "pending", kind: kind }; return }
+    const payload = JSON.parse(p.getString("payload") || "{}")
+    if (data.status === "failed") { p.set("status", "failed"); tx.save(p); out = { status: "failed", kind: kind }; return }
+    if (data.status !== "successful") { out = { status: "pending", kind: kind }; return }
+    if (data.tx_ref !== reference || String(data.currency).toUpperCase() !== payload.currency || Number(data.amount) + 0.001 < payload.chargeAmount) {
       p.set("status", "failed"); tx.save(p)
-      console.log("[bookitfest] stripe amount mismatch for", session.id)
+      console.log("[bookitfest] flutterwave verification mismatch for", reference)
       out = { status: "failed", kind: kind }; return
     }
     const userId = p.getString("user")
     const amount = money(p.getFloat("amount"))
-    const payload = JSON.parse(p.getString("payload") || "{}")
     let result = {}
     if (kind === "deposit") {
       const u = tx.findRecordById("users", userId)
       u.set("balance", money(u.getFloat("balance") + amount))
       tx.save(u)
-      logTx(tx, userId, "deposit", "Stripe", amount, "completed", "Wallet top-up")
+      logTx(tx, userId, "deposit", "Flutterwave", amount, "completed", "Wallet top-up")
       result = { amount: amount }
     } else {
       const event = tx.findRecordById("events", payload.eventId)
       const tickets = issueTickets(tx, {
         userId: userId, event: event, qty: payload.qty, price: payload.price,
-        name: payload.name, email: payload.email, method: "Stripe", total: amount,
+        name: payload.name, email: payload.email, method: "Flutterwave", total: amount,
       })
       result = { tickets: tickets, total: amount, eventId: event.id }
     }
@@ -261,5 +250,5 @@ function fulfillStripeSession(app, session) {
 
 module.exports = {
   CFG, money, int, simulatedPaymentsEnabled, randomCode, logTx, findOpenDraw, ensureOpenDraw, seedDemo,
-  issueTickets, stripeEnabled, stripeRequest, frontendOrigin, verifyStripeSignature, fulfillStripeSession,
+  issueTickets, flwEnabled, flwCurrency, flwChargeAmount, flwRequest, flwVerify, frontendOrigin, fulfillFlutterwave,
 }

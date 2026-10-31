@@ -75,19 +75,19 @@ export default {
     const showErr = (m, t) => { const el = $('#m-err', m.el); el.textContent = t; el.classList.remove('hidden') }
 
     const openDeposit = () => {
-      const stripeOn = state.config.stripeEnabled, sim = state.config.simulatedPayments || stripeOn
+      const flwOn = state.config.flutterwaveEnabled, sim = state.config.simulatedPayments || flwOn
       const m = openModal(`${closeButton}<div class="p-6 space-y-4"><h3 class="text-lg font-bold text-gray-900">Top-Up Wallet</h3>
         ${sim ? '' : '<p class="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">Deposits are not connected to a payment provider yet.</p>'}
         <div class="grid grid-cols-3 gap-2">${[50, 100, 250].map((u) => `<button data-quick="${fromUSD(u)}" class="py-2.5 bg-gray-100 hover:bg-red-50 text-xs font-bold rounded-xl border border-gray-200 hover:border-red-300">${fmt(u)}</button>`).join('')}</div>
         ${amountField('m-amt')}${errBox}
-        <button id="m-go" ${sim ? '' : 'disabled'} class="w-full bg-red-600 hover:bg-red-700 disabled:bg-gray-300 text-white font-bold py-3 rounded-xl text-xs shadow-md flex items-center justify-center gap-2">${stripeOn ? 'Pay with Card (Stripe)' : 'Confirm Top Up'}</button></div>`)
+        <button id="m-go" ${sim ? '' : 'disabled'} class="w-full bg-red-600 hover:bg-red-700 disabled:bg-gray-300 text-white font-bold py-3 rounded-xl text-xs shadow-md flex items-center justify-center gap-2">${flwOn ? 'Pay with Flutterwave' : 'Confirm Top Up'}</button></div>`)
       m.el.addEventListener('click', (e) => { const q = e.target.closest('[data-quick]'); if (q) $('#m-amt', m.el).value = q.dataset.quick })
       $('#m-go', m.el).onclick = async (e) => {
         const usd = toUSD($('#m-amt', m.el).value)
         if (!(usd >= 1)) return showErr(m, `Enter at least ${fmt(1)}.`)
         setBusy(e.currentTarget, true, 'Processing…')
         try {
-          if (stripeOn) { const { url } = await post('stripe/checkout', { kind: 'deposit', amount: usd, origin: location.origin }); location.href = url; return }
+          if (flwOn) { const { url } = await post('flw/checkout', { kind: 'deposit', amount: usd, origin: location.origin }); location.href = url; return }
           await post('wallet/deposit', { amount: usd }); await refreshMe(); m.close(); toast(`Wallet topped up by ${fmt(usd)}.`); reload()
         }
         catch (err) { setBusy($('#m-go', m.el), false); showErr(m, errMsg(err)) }
@@ -125,22 +125,22 @@ export default {
     root.addEventListener('click', onClick)
     const off = bus.on('auth', paintBalance)
 
-    // Coming back from Stripe Checkout
+    // Coming back from Flutterwave checkout (?status=...&tx_ref=...&transaction_id=...)
     const qs = new URLSearchParams(location.search)
-    const sid = qs.get('stripe_session')
-    if (qs.get('stripe') === 'cancelled') toast('Top-up cancelled. You have not been charged.')
-    if (sid) {
+    const ref = qs.get('tx_ref'), txId = qs.get('transaction_id')
+    if (ref) {
       history.replaceState(null, '', 'wallet.html')
-      ;(async () => {
+      if (qs.get('status') === 'cancelled') toast('Top-up cancelled. You have not been charged.')
+      else (async () => {
         for (let i = 0; i < 6; i++) {
           try {
-            const r = await pb.send('/api/bkf/stripe/confirm', { query: { session_id: sid } })
+            const r = await pb.send('/api/bkf/flw/confirm', { query: { tx_ref: ref, ...(txId ? { transaction_id: txId } : {}) } })
             if (r.status === 'paid') { await refreshMe(); paintBalance(); reload(); return toast(`Wallet topped up by ${fmt(r.amount)}.`) }
             if (r.status !== 'pending') break
           } catch (err) { return toast(errMsg(err)) }
           await new Promise((ok) => setTimeout(ok, 2000))
         }
-        toast("We couldn't confirm the payment yet. If you were charged, your balance will update shortly.")
+        toast("We couldn't confirm the payment. If you were charged, your balance will update shortly.")
       })()
     }
     reload()

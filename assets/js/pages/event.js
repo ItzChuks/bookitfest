@@ -81,7 +81,7 @@ export default {
         <div><label class="block text-xs font-semibold text-gray-700 mb-1" for="bk-email">Email Address *</label><input class="field" type="email" id="bk-email" data-field="email" value="${esc(bk.email)}" autocomplete="email" placeholder="john@example.com"><p class="text-[11px] text-gray-400 mt-1">Your tickets are also saved in your wallet.</p></div>
         ${err}<div class="flex items-center space-x-3 pt-1"><button data-act="back" class="w-1/3 bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold py-3 rounded-2xl transition text-sm">Back</button>
         <button data-act="next" class="w-2/3 bg-red-600 hover:bg-red-700 text-white font-bold py-3 rounded-2xl shadow-lg shadow-red-200 flex items-center justify-center space-x-2 transition text-sm"><span>Continue to Payment</span><i class="fas fa-arrow-right"></i></button></div></div>`
-      const u = me(), sim = state.config.simulatedPayments, stripeOn = state.config.stripeEnabled
+      const u = me(), sim = state.config.simulatedPayments, flwOn = state.config.flutterwaveEnabled
       const low = u && bk.gateway === 'wallet' && u.balance < total()
       return `<div class="space-y-4">
         <div class="bg-gray-900 text-white p-4 rounded-2xl text-xs space-y-1"><div class="flex justify-between items-center text-sm font-bold"><span class="text-red-400">Total Payable</span><span class="text-xl text-white">${fmt(total())}</span></div>
@@ -89,7 +89,7 @@ export default {
         <div class="space-y-2"><label class="block text-xs font-bold text-gray-700" for="bk-gw">Payment Option</label>
           <select id="bk-gw" data-field="gateway" class="field font-bold"><option value="wallet" ${bk.gateway === 'wallet' ? 'selected' : ''}>Bookitfest Wallet${u ? ' (' + fmt(u.balance) + ')' : ''}</option>
             <option value="paystack" ${bk.gateway === 'paystack' ? 'selected' : ''} ${sim ? '' : 'disabled'}>Paystack Card / Transfer${sim ? ' (demo)' : ' (coming soon)'}</option>
-            <option value="stripe" ${bk.gateway === 'stripe' ? 'selected' : ''} ${sim || stripeOn ? '' : 'disabled'}>Card / Apple Pay (Stripe)${stripeOn ? '' : sim ? ' (demo)' : ' (coming soon)'}</option></select></div>
+            <option value="flutterwave" ${bk.gateway === 'flutterwave' ? 'selected' : ''} ${sim || flwOn ? '' : 'disabled'}>Card / Bank Transfer / USSD (Flutterwave)${flwOn ? '' : sim ? ' (demo)' : ' (coming soon)'}</option></select></div>
         ${low ? `<p class="text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">Your balance is ${fmt(u.balance)}. <a href="wallet.html" class="underline font-bold">Top up your wallet</a> to pay with it.</p>` : ''}
         ${err}<div class="flex items-center space-x-3 pt-1"><button data-act="back" class="w-1/3 bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold py-3.5 rounded-2xl transition text-sm">Back</button>
         <button data-act="pay" class="w-2/3 bg-red-600 hover:bg-red-700 text-white font-bold py-3.5 rounded-2xl shadow-lg shadow-red-200 flex items-center justify-center space-x-2 transition text-sm">
@@ -127,8 +127,8 @@ export default {
         if (!me()) return openAuth('login')
         setBusy(b, true, 'Processing…')
         try {
-          if (bk.gateway === 'stripe' && state.config.stripeEnabled) {
-            const { url } = await post('stripe/checkout', { kind: 'ticket', eventId: evt.id, qty: bk.qty, name: bk.name.trim(), email: bk.email.trim(), origin: location.origin })
+          if (bk.gateway === 'flutterwave' && state.config.flutterwaveEnabled) {
+            const { url } = await post('flw/checkout', { kind: 'ticket', eventId: evt.id, qty: bk.qty, name: bk.name.trim(), email: bk.email.trim(), origin: location.origin })
             location.href = url; return
           }
           const res = await post('purchase', { eventId: evt.id, qty: bk.qty, name: bk.name.trim(), email: bk.email.trim(), gateway: bk.gateway })
@@ -148,21 +148,23 @@ export default {
     panel.addEventListener('change', onField)
     const offAuth = bus.on('auth', () => { if (!bk.tickets && bk.step === 3) draw() })
 
-    // Coming back from Stripe Checkout
+    // Coming back from Flutterwave checkout (?status=...&tx_ref=...&transaction_id=...)
     const qs = new URLSearchParams(location.search)
-    const sid = qs.get('stripe_session')
-    if (qs.get('stripe') === 'cancelled') { bk.step = 3; bk.error = 'Payment was cancelled. You have not been charged.' }
-    if (sid) {
+    const ref = qs.get('tx_ref'), txId = qs.get('transaction_id'), fstatus = qs.get('status')
+    if (ref) {
       history.replaceState(null, '', `event.html?id=${encodeURIComponent(evt.id)}`)
-      panel.innerHTML = `${header(false)}<div class="p-8 text-center text-xs text-gray-500 space-y-3"><i class="fas fa-spinner fa-spin text-2xl text-red-500"></i><p class="font-bold text-gray-700">Confirming your payment…</p></div>`
-      let res = null
-      for (let i = 0; i < 6 && !res; i++) {
-        try { const r = await pb.send('/api/bkf/stripe/confirm', { query: { session_id: sid } }); if (r.status === 'paid') res = r; else if (r.status !== 'pending') break }
-        catch (err) { bk.error = errMsg(err); break }
-        if (!res) await new Promise((ok) => setTimeout(ok, 2000))
+      if (fstatus === 'cancelled') { bk.step = 3; bk.error = 'Payment was cancelled. You have not been charged.' }
+      else {
+        panel.innerHTML = `${header(false)}<div class="p-8 text-center text-xs text-gray-500 space-y-3"><i class="fas fa-spinner fa-spin text-2xl text-red-500"></i><p class="font-bold text-gray-700">Confirming your payment…</p></div>`
+        let res = null
+        for (let i = 0; i < 6 && !res; i++) {
+          try { const r = await pb.send('/api/bkf/flw/confirm', { query: { tx_ref: ref, ...(txId ? { transaction_id: txId } : {}) } }); if (r.status === 'paid') res = r; else if (r.status !== 'pending') break }
+          catch (err) { bk.error = errMsg(err); break }
+          if (!res) await new Promise((ok) => setTimeout(ok, 2000))
+        }
+        if (res?.tickets) { await refreshMe(); bk.tickets = res.tickets; playSound('win') }
+        else { bk.step = 3; bk.error ||= "We couldn't confirm your payment. If you were charged, your tickets will appear in your wallet shortly." }
       }
-      if (res?.tickets) { await refreshMe(); bk.tickets = res.tickets; playSound('win') }
-      else { bk.step = 3; bk.error ||= "We couldn't confirm your payment yet. If you were charged, your tickets will appear in your wallet shortly." }
     }
     draw()
 

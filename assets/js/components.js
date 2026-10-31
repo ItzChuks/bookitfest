@@ -1,12 +1,14 @@
 import { esc, fmtDateTime, imgOnError, PLACEHOLDER_IMG } from './ui.js'
 import { fmt } from './state.js'
+import { pb } from './pb.js'
 
 export const TIER_NAMES = { early: 'Early Bird Pass', regular: 'Regular Gate Pass', vip: 'VIP Ultra Experience' }
 export const CATEGORIES = [
   { value: 'All', label: 'All' }, { value: 'Music Festival', label: 'Concerts' }, { value: 'Tech Conference', label: 'Tech Expos' },
   { value: 'Cultural Fair', label: 'Cultural' }, { value: 'Sports & Gaming', label: 'Sports & Gaming' },
 ]
-export const evtImage = (e) => e.image_url || PLACEHOLDER_IMG
+// Uploaded cover (stored by PocketBase) first, then the legacy image link, then the placeholder.
+export const evtImage = (e) => (e.image ? pb.files.getURL(e, e.image) : e.image_url || PLACEHOLDER_IMG)
 
 export function eventCard(e) {
   return `<article class="bg-white rounded-3xl overflow-hidden shadow-sm border border-gray-100 hover:shadow-xl transition group flex flex-col">

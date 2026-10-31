@@ -23,7 +23,8 @@ routerAdd("GET", "/api/bkf/config", (e) => {
     luckyFeeUSD: lib.CFG.LUCKY_FEE_USD,
     maxTicketsPerOrder: lib.CFG.MAX_TICKETS_PER_ORDER,
     simulatedPayments: lib.simulatedPaymentsEnabled(),
-    stripeEnabled: lib.stripeEnabled(),
+    flutterwaveEnabled: lib.flwEnabled(),
+    chargeCurrency: lib.flwCurrency(),
   })
 })
 
@@ -42,10 +43,10 @@ routerAdd("POST", "/api/bkf/purchase", (e) => {
   if (!name || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new BadRequestError("Enter the attendee's name and a valid email.")
 
   const gateway = String(body.gateway || "wallet")
-  const gatewayLabel = { wallet: "Bookitfest Wallet", paystack: "Paystack (simulated)", stripe: "Stripe (simulated)" }[gateway]
+  const gatewayLabel = { wallet: "Bookitfest Wallet", paystack: "Paystack (simulated)", flutterwave: "Flutterwave (simulated)" }[gateway]
   if (!gatewayLabel) throw new BadRequestError("Unknown payment method.")
-  if (gateway === "stripe" && lib.stripeEnabled() && !lib.simulatedPaymentsEnabled()) {
-    throw new BadRequestError("Card payments go through Stripe Checkout. Please try again.")
+  if (gateway === "flutterwave" && lib.flwEnabled() && !lib.simulatedPaymentsEnabled()) {
+    throw new BadRequestError("Card payments go through Flutterwave checkout. Please try again.")
   }
   if (gateway !== "wallet" && !lib.simulatedPaymentsEnabled()) {
     throw new BadRequestError("Card payments aren't connected yet. Pay with your wallet instead.")
@@ -216,23 +217,22 @@ routerAdd("POST", "/api/bkf/ticket/check", (e) => {
 }, $apis.requireAuth())
 
 
-// ---- Stripe: start a Checkout session (ticket purchase or wallet deposit) ----
+// ---- Flutterwave: start a hosted checkout (ticket purchase or wallet deposit) ----
 // Amounts are always worked out here from server-side prices, never from the browser.
-routerAdd("POST", "/api/bkf/stripe/checkout", (e) => {
+routerAdd("POST", "/api/bkf/flw/checkout", (e) => {
   const lib = require(`${__hooks}/bkf_lib.js`)
-  if (!lib.stripeEnabled()) throw new BadRequestError("Card payments aren't connected yet.")
+  if (!lib.flwEnabled()) throw new BadRequestError("Card payments aren't connected yet.")
   const body = e.requestInfo().body
   const origin = lib.frontendOrigin(body.origin)
   const kind = body.kind === "deposit" ? "deposit" : "ticket"
 
-  let amount = 0, payload = {}, productName = "", productDesc = "", successUrl = "", cancelUrl = ""
+  let amount = 0, payload = {}, title = "", desc = "", returnUrl = ""
   if (kind === "deposit") {
     amount = lib.money(body.amount)
     if (!(amount >= 1 && amount <= lib.CFG.MAX_DEPOSIT_USD)) throw new BadRequestError(`Deposits must be between $1 and $${lib.CFG.MAX_DEPOSIT_USD}.`)
-    productName = "Bookitfest wallet top-up"
-    productDesc = "Funds are added to your Bookitfest wallet"
-    successUrl = `${origin}/wallet.html?stripe_session={CHECKOUT_SESSION_ID}`
-    cancelUrl = `${origin}/wallet.html?stripe=cancelled`
+    title = "Bookitfest wallet top-up"
+    desc = "Funds are added to your Bookitfest wallet"
+    returnUrl = `${origin}/wallet.html`
   } else {
     const q = body.qty || {}
     const qty = { early: lib.int(q.early), regular: lib.int(q.regular), vip: lib.int(q.vip) }
@@ -248,91 +248,90 @@ routerAdd("POST", "/api/bkf/stripe/checkout", (e) => {
     if (event.getDateTime("starts_at").time().unix() < Math.floor(Date.now() / 1000)) throw new BadRequestError("This event has already started.")
     const price = { early: event.getFloat("price_early"), regular: event.getFloat("price_regular"), vip: event.getFloat("price_vip") }
     amount = lib.money(qty.early * price.early + qty.regular * price.regular + qty.vip * price.vip)
-    if (amount < 0.5) throw new BadRequestError("Card payments need a total of at least $0.50. Use your wallet for free or very small orders.")
+    if (!(amount > 0)) throw new BadRequestError("Free tickets don't need a card payment. Use your wallet instead.")
     payload = { eventId: event.id, qty: qty, price: price, name: name, email: email }
-    productName = event.getString("title")
-    productDesc = `${seats} ticket${seats === 1 ? "" : "s"} for ${name}`
-    successUrl = `${origin}/event.html?id=${event.id}&stripe_session={CHECKOUT_SESSION_ID}`
-    cancelUrl = `${origin}/event.html?id=${event.id}&stripe=cancelled`
+    title = event.getString("title")
+    desc = `${seats} ticket${seats === 1 ? "" : "s"} for ${name}`
+    returnUrl = `${origin}/event.html?id=${event.id}`
   }
+
+  const currency = lib.flwCurrency()
+  const chargeAmount = lib.flwChargeAmount(amount)
+  payload.currency = currency
+  payload.chargeAmount = chargeAmount
+  const reference = lib.randomCode("BKFPAY")
 
   const pay = new Record($app.findCollectionByNameOrId("payments"))
   pay.set("user", e.auth.id)
   pay.set("kind", kind)
-  pay.set("provider", "stripe")
+  pay.set("provider", "flutterwave")
+  pay.set("reference", reference)
   pay.set("amount", amount)
   pay.set("status", "pending")
   pay.set("payload", JSON.stringify(payload))
   $app.save(pay)
 
   try {
-    const session = lib.stripeRequest("POST", "/checkout/sessions", {
-      mode: "payment",
-      client_reference_id: pay.id,
-      customer_email: e.auth.email(),
-      success_url: successUrl,
-      cancel_url: cancelUrl,
-      line_items: [{
-        quantity: 1,
-        price_data: { currency: "usd", unit_amount: Math.round(amount * 100), product_data: { name: productName, description: productDesc } },
-      }],
-      metadata: { payment_id: pay.id, user_id: e.auth.id, kind: kind },
+    const r = lib.flwRequest("POST", "/payments", {
+      tx_ref: reference,
+      amount: chargeAmount,
+      currency: currency,
+      redirect_url: returnUrl,
+      customer: { email: e.auth.email(), name: e.auth.getString("name") || e.auth.email() },
+      meta: { payment_id: pay.id, user_id: e.auth.id, kind: kind },
+      customizations: { title: "Bookitfest", description: title + " — " + desc },
     })
-    pay.set("session_id", session.id)
-    $app.save(pay)
-    return e.json(200, { url: session.url })
+    return e.json(200, { url: r.data.link })
   } catch (err) {
-    console.log("[bookitfest] stripe checkout failed:", err)
+    console.log("[bookitfest] flutterwave checkout failed:", err)
     pay.set("status", "failed")
     $app.save(pay)
     throw new BadRequestError("We couldn't start the card payment. Please try again in a moment.")
   }
 }, $apis.requireAuth())
 
-// ---- Stripe: the buyer lands back on the site; confirm with Stripe and deliver ----
+// ---- Flutterwave: buyer lands back on the site; verify with Flutterwave and deliver ----
 // Works even if the webhook is slow. Idempotent with the webhook below.
-routerAdd("GET", "/api/bkf/stripe/confirm", (e) => {
+routerAdd("GET", "/api/bkf/flw/confirm", (e) => {
   const lib = require(`${__hooks}/bkf_lib.js`)
-  if (!lib.stripeEnabled()) throw new BadRequestError("Card payments aren't connected yet.")
-  const sid = String(e.request.url.query().get("session_id") || "")
-  if (!/^cs_[A-Za-z0-9_]+$/.test(sid)) throw new BadRequestError("Missing payment reference.")
+  if (!lib.flwEnabled()) throw new BadRequestError("Card payments aren't connected yet.")
+  const q = e.request.url.query()
+  const ref = String(q.get("tx_ref") || "")
+  const txId = String(q.get("transaction_id") || "")
+  if (!/^BKFPAY-[A-Z0-9]+$/.test(ref)) throw new BadRequestError("Missing payment reference.")
+  if (txId && !/^[0-9]+$/.test(txId)) throw new BadRequestError("Bad transaction id.")
   let pay
-  try { pay = $app.findFirstRecordByFilter("payments", "session_id = {:s} && user = {:u}", { s: sid, u: e.auth.id }) }
+  try { pay = $app.findFirstRecordByFilter("payments", "reference = {:r} && user = {:u}", { r: ref, u: e.auth.id }) }
   catch (_) { throw new NotFoundError("We couldn't find that payment.") }
-  let out = { status: pay.getString("status"), kind: pay.getString("kind") }
-  if (out.status === "pending") {
-    const session = lib.stripeRequest("GET", "/checkout/sessions/" + sid)
-    out = lib.fulfillStripeSession($app, session)
-  } else if (out.status === "paid") {
-    out = lib.fulfillStripeSession($app, { id: sid })
+  let out
+  if (pay.getString("status") === "pending") {
+    let data = null
+    try { data = lib.flwVerify(txId, ref) } catch (err) { console.log("[bookitfest] flutterwave verify:", err) }
+    out = lib.fulfillFlutterwave($app, ref, data)
+  } else {
+    out = lib.fulfillFlutterwave($app, ref, null)
   }
   const u = $app.findRecordById("users", e.auth.id)
   return e.json(200, Object.assign({ balance: u.getFloat("balance") }, out))
 }, $apis.requireAuth())
 
-// ---- Stripe webhook (no login; authenticated by Stripe's signature) ----
-routerAdd("POST", "/api/bkf/stripe/webhook", (e) => {
+// ---- Flutterwave webhook (no login; authenticated by your secret hash, then re-verified via the API) ----
+routerAdd("POST", "/api/bkf/flw/webhook", (e) => {
   const lib = require(`${__hooks}/bkf_lib.js`)
-  const secret = ($os.getenv("STRIPE_WEBHOOK_SECRET") || "").trim()
-  const raw = toString(e.request.body)
-  if (!lib.verifyStripeSignature(raw, e.request.header.get("Stripe-Signature"), secret)) {
-    return e.json(400, { message: "Invalid signature." })
-  }
-  const event = JSON.parse(raw)
-  const obj = event.data && event.data.object
-  try {
-    if (event.type === "checkout.session.completed" || event.type === "checkout.session.async_payment_succeeded") {
-      lib.fulfillStripeSession($app, obj)
-    } else if (event.type === "checkout.session.expired" || event.type === "checkout.session.async_payment_failed") {
-      try {
-        const p = $app.findFirstRecordByFilter("payments", "session_id = {:s} && status = 'pending'", { s: obj.id })
-        p.set("status", event.type === "checkout.session.expired" ? "expired" : "failed")
-        $app.save(p)
-      } catch (_) {}
+  const secret = ($os.getenv("FLW_SECRET_HASH") || "").trim()
+  const sent = String(e.request.header.get("verif-hash") || "")
+  if (!secret || !sent || !$security.equal(sent, secret)) return e.json(401, { message: "Invalid signature." })
+  let evt
+  try { evt = JSON.parse(toString(e.request.body)) } catch (_) { return e.json(400, { message: "Bad body." }) }
+  const d = evt.data || {}
+  if (evt.event === "charge.completed" && d.tx_ref && d.id) {
+    try {
+      const data = lib.flwVerify(String(d.id), String(d.tx_ref))
+      lib.fulfillFlutterwave($app, String(d.tx_ref), data)
+    } catch (err) {
+      console.log("[bookitfest] flutterwave webhook error:", err)
+      return e.json(500, { message: "Handler error." }) // Flutterwave will retry
     }
-  } catch (err) {
-    console.log("[bookitfest] stripe webhook error:", err)
-    return e.json(500, { message: "Handler error." }) // Stripe will retry
   }
   return e.json(200, { received: true })
 })
