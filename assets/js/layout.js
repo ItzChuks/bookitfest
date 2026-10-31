@@ -58,10 +58,8 @@ export function renderHeader() {
   $('#site-header').innerHTML = `<header class="sticky top-0 z-40 bg-white/90 backdrop-blur-md border-b border-red-100 shadow-sm">
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
       <div class="flex items-center justify-between h-16 sm:h-20 gap-3">
-        <a href="index.html" class="flex items-center space-x-3 shrink-0" aria-label="Bookitfest home">
-          <div class="w-10 h-10 rounded-2xl bg-gradient-to-tr from-red-600 to-red-700 flex items-center justify-center text-white shadow-md shadow-red-200"><i class="fas fa-ticket-alt text-xl transform -rotate-12"></i></div>
-          <div><span class="text-2xl font-black tracking-tight text-gray-900">Bookit<span class="text-red-600">fest</span></span>
-          <span class="block text-[9px] uppercase tracking-widest text-red-500 font-bold -mt-1">Multivendor & Games</span></div>
+        <a href="index.html" class="flex items-center shrink-0" aria-label="Bookitfest home">
+          <img src="assets/img/logo.png" alt="Bookitfest" width="116" height="40" class="h-9 sm:h-11 w-auto">
         </a>
         <nav class="hidden lg:flex items-center space-x-1" aria-label="Main">${navLinks(path, false)}</nav>
         <div class="flex items-center space-x-2 sm:space-x-3">
@@ -83,8 +81,8 @@ export function renderFooter() {
   const u = me()
   $('#site-footer').innerHTML = `<footer class="bg-white border-t border-gray-200 pt-10 pb-8 mt-8"><div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-6">
     <div class="flex flex-col sm:flex-row justify-between items-center border-b border-gray-100 pb-6 gap-4 text-center sm:text-left">
-      <div><span class="text-2xl font-black text-gray-900">Bookit<span class="text-red-600">fest</span></span>
-        <p class="text-xs text-gray-500 mt-1">Verified multivendor event passes and the Lucky 5 draw.</p></div>
+      <div class="flex flex-col items-center sm:items-start"><img src="assets/img/logo.png" alt="Bookitfest" width="116" height="40" class="h-10 w-auto">
+        <p class="text-xs text-gray-500 mt-2">Verified multivendor event passes and the Lucky 5 draw.</p></div>
       <nav class="flex flex-wrap justify-center gap-x-5 gap-y-2 text-xs font-bold text-gray-500" aria-label="Footer">
         <a href="events.html" class="hover:text-red-600">Events</a><a href="lucky.html" class="hover:text-red-600">Lucky 5</a>
         <a href="vendor.html" class="hover:text-red-600">Vendor Portal</a>${u?.role === 'admin' ? '<a href="admin.html" class="hover:text-red-600">Admin Dashboard</a>' : ''}</nav></div>
@@ -105,7 +103,7 @@ export function openAuth(mode = 'login', { next } = {}) {
   let m
   const body = () => `${closeButton}<div class="p-6 sm:p-8">
     <div class="text-center space-y-2 mb-6">
-      <div class="w-12 h-12 rounded-2xl bg-gradient-to-tr from-red-600 to-red-700 flex items-center justify-center text-white shadow-md shadow-red-200 mx-auto"><i class="fas fa-ticket-alt text-2xl transform -rotate-12"></i></div>
+      <img src="assets/img/logo-icon.png" alt="Bookitfest" width="48" height="64" class="h-16 w-auto mx-auto">
       <h3 class="text-2xl font-black text-gray-900">${isRegister ? 'Create Your Account' : 'Sign In to Bookitfest'}</h3>
       <p class="text-xs text-gray-500">Access your vendor events, tickets & wallet</p></div>
     <form id="auth-form" class="space-y-4" novalidate>

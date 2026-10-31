@@ -9,7 +9,7 @@ Frontend is plain static files at the project root. PocketBase lives in `backend
 index.html events.html event.html lucky.html wallet.html vendor.html admin.html 404.html   one file per page
 assets/
   css/app.css            extra styles
-  img/                   placeholder image
+  img/                   logos (logo.png, logo-icon.png), favicons, placeholder image
   js/
     config.js            PocketBase URL + NGN rate  <- the only file you edit to deploy
     tailwind.config.js   Tailwind theme
