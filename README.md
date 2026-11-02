@@ -48,6 +48,7 @@ To make someone an admin, open `<your-pocketbase>/_/` > users and set `role` to 
 
 - Event cover images are uploaded from the vendor's device (max 5 MB, JPG/PNG/WebP/GIF) and stored by PocketBase in `pb_data/storage`. On Railway keep the volume mounted at `/pb/pb_data` or uploads are lost on redeploy.
 
+- Vendors can edit their own events at any status from the Vendor dashboard (migration `1760000003`). Editing a live event keeps it live; editing a rejected one resubmits it for approval. Admins see all vendors, users and admins in the Users table on the Admin console (served by `/api/bkf/admin/users`, which also reveals emails that PocketBase hides from non-superusers).
 - Money logic (balances, tickets, Lucky 5, draws, check-in) is server-side only, in `backend/pb_hooks/`. Browser writes to those collections are rejected by the rules.
 - **Flutterwave is live** (hosted checkout, see below). Paystack is still simulated only when `BKF_SIMULATE_PAYMENTS=1`; it gets wired in next.
 - Before launch: HTTPS, SMTP in the PocketBase settings, review rate limits. Check that a paid prize draw is legal where you operate.

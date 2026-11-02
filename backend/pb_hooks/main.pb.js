@@ -146,6 +146,22 @@ routerAdd("POST", "/api/bkf/lucky/enter", (e) => {
   return e.json(200, result)
 }, $apis.requireAuth())
 
+// ---- Admin: list every account (vendors, normal users, admins) ----
+// The users collection hides other people's emails from non-superusers, so admins read the list here.
+routerAdd("GET", "/api/bkf/admin/users", (e) => {
+  if (e.auth.getString("role") !== "admin") throw new ForbiddenError("Admins only.")
+  const rows = $app.findRecordsByFilter("users", "id != ''", "-created", 0, 0)
+  return e.json(200, rows.map((u) => ({
+    id: u.id,
+    name: u.getString("name"),
+    email: u.email(),
+    role: u.getString("role") || "user",
+    balance: u.getFloat("balance"),
+    verified: u.verified(),
+    created: u.getString("created"),
+  })))
+}, $apis.requireAuth())
+
 // ---- Admin: run the draw ----
 routerAdd("POST", "/api/bkf/admin/draw", (e) => {
   const lib = require(`${__hooks}/bkf_lib.js`)

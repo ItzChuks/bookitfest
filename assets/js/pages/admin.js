@@ -1,7 +1,7 @@
 import { pb, post, errMsg } from '../pb.js'
 import { fmt } from '../state.js'
 import { digitChips } from '../components.js'
-import { $, esc, fmtDateTime, fmtDay, badge, setBusy, toast, confirmBox, openModal, closeButton, emptyState } from '../ui.js'
+import { $, esc, fmtDateTime, fmtDay, badge, setBusy, toast, confirmBox, openModal, closeButton, emptyState, debounce } from '../ui.js'
 import { bus } from '../state.js'
 import { playSound } from '../audio.js'
 
@@ -9,8 +9,8 @@ export default {
   title: 'Admin Console',
   render: () => `<div class="space-y-8"><div class="bg-white rounded-3xl p-5 sm:p-8 border border-red-100 shadow-xl space-y-6">
     <div class="border-b border-gray-100 pb-6"><span class="bg-indigo-100 text-indigo-700 text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-wider">Super Admin Console</span>
-      <h1 class="text-2xl sm:text-3xl font-black text-gray-900 mt-2">Vendor Event Approvals & Draw Management</h1>
-      <p class="text-xs text-gray-500 mt-1 max-w-2xl">Review vendor submissions, approve live marketplace events, and run the Lucky 5 draw automatically or with a manual outcome.</p></div>
+      <h1 class="text-2xl sm:text-3xl font-black text-gray-900 mt-2">Approvals, Users & Draw Management</h1>
+      <p class="text-xs text-gray-500 mt-1 max-w-2xl">Review vendor submissions, see every vendor and user on the site, and run the Lucky 5 draw automatically or with a manual outcome.</p></div>
 
     <div class="bg-slate-900 text-white p-5 sm:p-6 rounded-2xl space-y-4">
       <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-3"><h2 class="text-xs font-bold text-amber-400 uppercase tracking-widest"><i class="fas fa-dice mr-1"></i> Admin Lucky 5 Winner Controller</h2>
@@ -25,12 +25,19 @@ export default {
       <div class="overflow-x-auto"><table class="w-full text-left text-xs table-stack"><thead class="bg-gray-50 text-gray-400 uppercase font-bold"><tr><th class="p-3">Event Details</th><th class="p-3">Category</th><th class="p-3">Pricing Tiers</th><th class="p-3">Status</th><th class="p-3 text-right">Actions</th></tr></thead>
         <tbody class="divide-y divide-gray-100" id="a-events"><tr><td colspan="5" class="p-6 text-center text-gray-400">Loading…</td></tr></tbody></table></div></section>
 
+    <section><div class="flex flex-wrap items-center justify-between gap-3 mb-3"><h2 class="font-bold text-gray-900 text-lg">Users <span class="text-xs text-gray-400 font-semibold" id="a-ucount"></span></h2>
+        <div class="flex flex-wrap items-center gap-2"><div class="flex bg-gray-100 rounded-xl p-1 text-[11px] font-bold" id="a-utabs" role="tablist">
+          ${[['all', 'All'], ['vendor', 'Vendors'], ['user', 'Users'], ['admin', 'Admins']].map(([k, l]) => `<button type="button" role="tab" data-utab="${k}" class="px-3 py-1.5 rounded-lg transition">${l} <span class="opacity-60" data-ucnt="${k}"></span></button>`).join('')}</div>
+          <label class="sr-only" for="a-usearch">Search users</label><input id="a-usearch" type="search" placeholder="Search name or email" class="field !py-2 !w-48"></div></div>
+      <div class="overflow-x-auto"><table class="w-full text-left text-xs table-stack"><thead class="bg-gray-50 text-gray-400 uppercase font-bold"><tr><th class="p-3">Name</th><th class="p-3">Email</th><th class="p-3">Role</th><th class="p-3">Activity</th><th class="p-3">Wallet</th><th class="p-3">Joined</th></tr></thead>
+        <tbody class="divide-y divide-gray-100" id="a-users"><tr><td colspan="6" class="p-6 text-center text-gray-400">Loading…</td></tr></tbody></table></div></section>
+
     <section><h2 class="font-bold text-gray-900 text-lg mb-3">Withdrawal requests</h2>
       <div class="overflow-x-auto"><table class="w-full text-left text-xs table-stack"><thead class="bg-gray-50 text-gray-400 uppercase font-bold"><tr><th class="p-3">User</th><th class="p-3">Bank / Account</th><th class="p-3">Amount</th><th class="p-3">Requested</th><th class="p-3 text-right">Action</th></tr></thead>
         <tbody class="divide-y divide-gray-100" id="a-wd"><tr><td colspan="5" class="p-6 text-center text-gray-400">Loading…</td></tr></tbody></table></div></section></div></div>`,
 
   async mount(ctx, root) {
-    let events = [], wds = [], draw = null
+    let events = [], wds = [], draw = null, users = [], utab = 'all', uq = ''
     const paintEvents = () => {
       $('#a-events', root).innerHTML = events.length ? events.map((e) => `<tr class="hover:bg-gray-50/50">
         <td data-label="Event" class="p-3"><span class="font-bold text-gray-900 block">${esc(e.title)}</span><span class="text-[11px] text-gray-400">${esc(e.vendor_name)} • ${esc(fmtDateTime(e.starts_at))}</span></td>
@@ -42,6 +49,24 @@ export default {
           ${e.status === 'pending' ? `<button data-ev="${esc(e.id)}" data-to="rejected" class="bg-gray-200 hover:bg-gray-300 text-gray-700 px-3 py-1.5 rounded text-[10px] font-bold transition ml-1">Reject</button>` : ''}
           ${e.status === 'approved' ? `<a href="event.html?id=${esc(e.id)}" class="text-red-600 hover:underline text-[10px] font-bold">View live</a>` : ''}</td></tr>`).join('')
         : `<tr><td colspan="5">${emptyState('fa-calendar', 'No events submitted yet', 'Vendor submissions will appear here for review.')}</td></tr>`
+    }
+    const ROLE_STYLES = { admin: 'bg-indigo-100 text-indigo-700', vendor: 'bg-red-100 text-red-700', user: 'bg-gray-100 text-gray-600' }
+    const paintUsers = () => {
+      const count = (r) => (r === 'all' ? users.length : users.filter((u) => u.role === r).length)
+      root.querySelectorAll('[data-ucnt]').forEach((el) => (el.textContent = count(el.dataset.ucnt)))
+      root.querySelectorAll('[data-utab]').forEach((b) => { const on = b.dataset.utab === utab; b.classList.toggle('bg-white', on); b.classList.toggle('shadow-sm', on); b.classList.toggle('text-gray-900', on); b.classList.toggle('text-gray-500', !on); b.setAttribute('aria-selected', on) })
+      const q = uq.trim().toLowerCase()
+      const rows = users.filter((u) => (utab === 'all' || u.role === utab) && (!q || `${u.name} ${u.email}`.toLowerCase().includes(q)))
+      $('#a-ucount', root).textContent = `(${rows.length} shown)`
+      const activity = (u) => u.role === 'vendor' ? `${events.filter((e) => e.vendor === u.id).length} event(s)` : '—'
+      $('#a-users', root).innerHTML = rows.length ? rows.map((u) => `<tr class="hover:bg-gray-50/50">
+        <td data-label="Name" class="p-3 font-bold text-gray-900">${esc(u.name || '—')}</td>
+        <td data-label="Email" class="p-3 text-gray-600 break-all">${esc(u.email)}</td>
+        <td data-label="Role" class="p-3"><span class="${ROLE_STYLES[u.role] || ROLE_STYLES.user} px-2 py-0.5 rounded-md text-[10px] font-bold uppercase">${esc(u.role)}</span></td>
+        <td data-label="Activity" class="p-3 text-gray-600">${esc(activity(u))}</td>
+        <td data-label="Wallet" class="p-3 font-semibold text-gray-700">${fmt(u.balance)}</td>
+        <td data-label="Joined" class="p-3 text-gray-400 whitespace-nowrap">${esc(fmtDay(u.created))}</td></tr>`).join('')
+        : `<tr><td colspan="6" class="p-6 text-center text-gray-400">${users.length ? 'No accounts match.' : 'No accounts yet.'}</td></tr>`
     }
     const paintWd = () => {
       $('#a-wd', root).innerHTML = wds.length ? wds.map((t) => `<tr><td data-label="User" class="p-3 font-bold text-gray-900">${esc(t.expand?.user?.name || '')}<span class="block text-[11px] text-gray-400 font-normal">${esc(t.expand?.user?.email || '')}</span></td>
@@ -65,8 +90,13 @@ export default {
         ])
         paintEvents(); paintWd()
       } catch (e) { toast(errMsg(e), 'error') }
+      try { users = await pb.send('/api/bkf/admin/users'); paintUsers(); paintEvents() }
+      catch (e) { $('#a-users', root).innerHTML = `<tr><td colspan="6" class="p-6 text-center text-red-600">${esc(errMsg(e))}</td></tr>` }
       loadDraw()
     }
+
+    root.querySelectorAll('[data-utab]').forEach((b) => (b.onclick = () => { utab = b.dataset.utab; paintUsers() }))
+    $('#a-usearch', root).oninput = debounce((e) => { uq = e.target.value; paintUsers() }, 150)
 
     $('#a-mode', root).onchange = (e) => {
       const manual = e.target.value === 'manual'
@@ -107,7 +137,7 @@ export default {
     }
     root.addEventListener('click', onClick)
     load()
-    this._repaint = () => { paintEvents(); paintWd(); loadDraw() }
+    this._repaint = () => { paintEvents(); paintUsers(); paintWd(); loadDraw() }
     return () => root.removeEventListener('click', onClick)
   },
   onCurrency() { this._repaint?.() },

@@ -1,7 +1,14 @@
 import { pb, post, errMsg } from '../pb.js'
-import { state, me, fmt, toUSD, currencyLabel, bus } from '../state.js'
-import { CATEGORIES, TIER_NAMES } from '../components.js'
-import { $, esc, fmtDateTime, badge, setBusy, toast, confirmBox, emptyState } from '../ui.js'
+import { state, me, fmt, toUSD, fromUSD, currencyLabel, bus } from '../state.js'
+import { CATEGORIES, TIER_NAMES, evtImage } from '../components.js'
+import { $, esc, fmtDateTime, badge, setBusy, toast, confirmBox, emptyState, openModal, closeButton } from '../ui.js'
+
+// "2026-11-15 18:00:00.000Z" -> value for <input type="datetime-local"> in the viewer's timezone
+const toLocalInput = (iso) => {
+  const d = new Date(String(iso).replace(' ', 'T')); const p = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`
+}
+const EDIT_CATS = ['Music Festival', 'Tech Conference', 'Cultural Fair', 'Sports & Gaming']
 
 export default {
   title: 'Vendor Dashboard',
@@ -64,6 +71,7 @@ export default {
         <div class="min-w-0"><p class="font-bold text-sm text-gray-900 truncate">${esc(e.title)}</p><p class="text-[11px] text-gray-500">${esc(fmtDateTime(e.starts_at))} • ${esc(e.location)}</p>
           <p class="mt-1.5 flex flex-wrap items-center gap-2">${badge(e.status)}<span class="text-[11px] text-gray-400 font-semibold">${sold(e.id)} sold • from ${fmt(e.price_early)}</span></p></div>
         <div class="flex gap-2 shrink-0">${e.status === 'approved' ? `<a href="event.html?id=${esc(e.id)}" class="text-xs font-bold text-red-600 border border-red-200 hover:bg-red-50 px-3 py-2 rounded-xl">View</a>` : ''}
+          <button data-edit="${esc(e.id)}" class="text-xs font-bold text-gray-700 border border-gray-200 hover:border-red-300 hover:text-red-600 px-3 py-2 rounded-xl"><i class="fas fa-pen mr-1"></i>Edit</button>
           ${e.status === 'pending' ? `<button data-del="${esc(e.id)}" class="text-xs font-bold text-gray-500 border border-gray-200 hover:border-red-300 hover:text-red-600 px-3 py-2 rounded-xl">Delete</button>` : ''}</div></div>`).join('')
         : emptyState('fa-calendar-plus', 'No events yet', 'Your submissions will appear here with their approval status.')
     }
@@ -123,7 +131,67 @@ export default {
       setBusy(btn, false)
     }
 
+
+    // ---- Edit an event (any status) ----
+    const openEdit = (ev) => {
+      const input = 'w-full p-2 border border-gray-200 rounded-lg text-base sm:text-sm font-black text-gray-900 focus:border-red-500 outline-none'
+      const note = ev.status === 'approved' ? 'This event is live. Changes show on the marketplace straight away. Tickets already sold keep the price they were bought at.'
+        : ev.status === 'rejected' ? 'This event was rejected. Saving your changes sends it back to the admin for another review.'
+        : 'This event is still waiting for admin approval.'
+      const m = openModal(`${closeButton}<form id="e-form" class="p-5 sm:p-6 space-y-4">
+        <div><h3 class="text-lg font-black text-gray-900 pr-8">Edit event</h3><p class="text-[11px] text-gray-500 mt-1">${esc(note)}</p></div>
+        <div><label class="block text-xs font-bold text-gray-700 mb-1" for="e-title">Event Title *</label><input class="field" id="e-title" required maxlength="140" value="${esc(ev.title)}"></div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div><label class="block text-xs font-bold text-gray-700 mb-1" for="e-cat">Category *</label><select class="field" id="e-cat">${EDIT_CATS.map((c) => `<option value="${esc(c)}" ${c === ev.category ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></div>
+          <div><label class="block text-xs font-bold text-gray-700 mb-1" for="e-date">Date & Time *</label><input class="field" type="datetime-local" id="e-date" required value="${esc(toLocalInput(ev.starts_at))}"></div></div>
+        <div><label class="block text-xs font-bold text-gray-700 mb-1" for="e-loc">Location / Venue *</label><input class="field" id="e-loc" required maxlength="200" value="${esc(ev.location)}"></div>
+        <div><span class="block text-xs font-bold text-gray-700 mb-1">Cover Banner Image</span>
+          <img id="e-img-prev" src="${esc(evtImage(ev))}" alt="Current cover" class="w-full h-36 object-cover rounded-xl border border-gray-200 bg-gray-50 mb-2">
+          <input type="file" id="e-img" accept="image/jpeg,image/png,image/webp,image/gif" class="block w-full text-xs text-gray-500 file:mr-3 file:rounded-lg file:border-0 file:bg-red-50 file:px-3 file:py-2 file:text-xs file:font-bold file:text-red-600">
+          <p class="text-[11px] text-gray-400 mt-1">Leave empty to keep the current image. Max 5 MB.</p></div>
+        <div><label class="block text-xs font-bold text-gray-700 mb-1" for="e-desc">Description</label><textarea class="field" id="e-desc" rows="3" maxlength="4000">${esc(ev.description || '')}</textarea></div>
+        <div class="bg-gray-50 p-3 rounded-2xl border border-gray-200 space-y-2"><p class="text-[10px] font-extrabold text-gray-900 uppercase tracking-wider">Ticket prices (${esc(currencyLabel())})</p>
+          <div class="grid grid-cols-3 gap-2">${[['early', 'Early Bird'], ['regular', 'Regular'], ['vip', 'VIP']].map(([k, l]) => `<div><label for="e-p-${k}" class="text-[10px] text-gray-400 font-bold block uppercase">${l}</label>
+            <input type="number" min="0" step="any" inputmode="decimal" id="e-p-${k}" required value="${fromUSD(ev['price_' + k])}" class="${input}"></div>`).join('')}</div></div>
+        <p id="e-err" class="hidden text-xs font-semibold text-red-600 bg-red-50 border border-red-200 rounded-xl px-3 py-2" role="alert"></p>
+        <div class="flex gap-3"><button type="button" data-close class="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold py-3 rounded-xl text-xs">Cancel</button>
+          <button type="submit" class="flex-1 bg-red-600 hover:bg-red-700 text-white font-bold py-3 rounded-xl text-xs flex items-center justify-center gap-2"><i class="fas fa-save"></i><span>Save changes</span></button></div></form>`, { wide: true })
+      const f = $('#e-form', m.el), err = $('#e-err', m.el), fileIn = $('#e-img', m.el)
+      const fail = (t) => { err.textContent = t; err.classList.remove('hidden') }
+      fileIn.onchange = () => {
+        err.classList.add('hidden'); const file = fileIn.files[0]; if (!file) return
+        if (!/^image\/(jpeg|png|webp|gif)$/.test(file.type)) { fileIn.value = ''; return fail('Please choose a JPG, PNG, WebP or GIF image.') }
+        if (file.size > 5 * 1024 * 1024) { fileIn.value = ''; return fail('That image is over 5 MB. Choose a smaller one.') }
+        $('#e-img-prev', m.el).src = URL.createObjectURL(file)
+      }
+      f.onsubmit = async (x) => {
+        x.preventDefault(); err.classList.add('hidden')
+        const prices = ['early', 'regular', 'vip'].map((k) => toUSD($(`#e-p-${k}`, m.el).value))
+        if (prices.some((p) => !(p >= 0))) return fail('Enter a price for every tier (use 0 for free).')
+        const when = new Date($('#e-date', m.el).value)
+        if (isNaN(when)) return fail('Pick a valid date and time.')
+        const dateChanged = when.getTime() !== new Date(ev.starts_at.replace(' ', 'T')).getTime()
+        if (dateChanged && !(when > new Date())) return fail('Pick a date and time in the future.')
+        const btn = $('button[type=submit]', f); setBusy(btn, true, 'Saving…')
+        try {
+          const fd = new FormData(); const price = (v) => String(+v.toFixed(2))
+          Object.entries({
+            title: $('#e-title', m.el).value.trim(), category: $('#e-cat', m.el).value, location: $('#e-loc', m.el).value.trim(),
+            description: $('#e-desc', m.el).value.trim(), price_early: price(prices[0]), price_regular: price(prices[1]), price_vip: price(prices[2]),
+          }).forEach(([k, v]) => fd.append(k, v))
+          if (dateChanged) fd.append('starts_at', when.toISOString().replace('T', ' '))
+          if (ev.status === 'rejected') fd.append('status', 'pending')
+          if (fileIn.files[0]) fd.append('image', fileIn.files[0])
+          await pb.collection('events').update(ev.id, fd)
+          m.close(); toast(ev.status === 'rejected' ? 'Event updated and resubmitted for approval.' : 'Event updated.'); bus.emit('pending'); load()
+        } catch (er) { fail(errMsg(er)) }
+        setBusy(btn, false)
+      }
+    }
+
     const onClick = async (e) => {
+      const ed = e.target.closest('[data-edit]')
+      if (ed) { const ev = events.find((x) => x.id === ed.dataset.edit); if (ev) openEdit(ev); return }
       const d = e.target.closest('[data-del]'); if (!d) return
       if (!(await confirmBox({ title: 'Delete this event?', body: 'It has not been approved yet, so no tickets have been sold. This cannot be undone.', confirmText: 'Delete event', danger: true }))) return
       try { await pb.collection('events').delete(d.dataset.del); toast('Event deleted.'); bus.emit('pending'); load() } catch (er) { toast(errMsg(er), 'error') }
