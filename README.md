@@ -86,3 +86,9 @@ Prices are stored in USD and charged in NGN at `FLW_NGN_RATE` by default. Test f
 - **Admin payments portal.** `admin-payments.html` lists every deposit and withdrawal (`GET /api/bkf/admin/payments`).
   Admins pay out or reject withdrawals via `POST /api/bkf/admin/withdrawal` (`{id, action: "pay"|"reject", note}`);
   rejecting refunds the wallet. Transaction records can no longer be edited directly from the browser.
+- **User profiles & manual credits.** In the Admin Console (Users table) and the Payments portal, an admin can open an
+  account's profile (`GET /api/bkf/admin/users/{id}`): details, totals, recent wallet activity and tickets. The same dialog
+  has "Add funds" (`POST /api/bkf/admin/users/{id}/credit`, `{amount, note}` with the amount in USD). A reason is required,
+  one credit is capped at $10,000, and it is logged as an `adjustment` ("Admin credit") transaction that the user sees in
+  their history and that appears under "Admin credits" in the Payments portal (it is not counted as a deposit).
+  Migration `1760000005_admin_credit.js` adds the new transaction type.

@@ -1,9 +1,10 @@
 import { pb, errMsg } from '../pb.js'
 import { fmt, bus } from '../state.js'
+import { openUserProfile } from '../admin-user.js'
 import { $, esc, fmtDateTime, badge, setBusy, toast, openModal, closeButton, emptyState, debounce } from '../ui.js'
 
 const PER_PAGE = 20
-const TYPE_TABS = [['', 'All'], ['deposit', 'Deposits'], ['withdrawal', 'Withdrawals']]
+const TYPE_TABS = [['', 'All'], ['deposit', 'Deposits'], ['withdrawal', 'Withdrawals'], ['adjustment', 'Admin credits']]
 const STATUSES = [['', 'All statuses'], ['pending', 'Pending'], ['completed', 'Completed'], ['failed', 'Failed / rejected']]
 
 export default {
@@ -54,16 +55,16 @@ export default {
         stat('Rejected', String(s.withdrawalsRejectedCount), s.withdrawalsRejectedCount === 1 ? 'withdrawal returned to wallet' : 'withdrawals returned to wallet')
     }
 
-    const TYPE_LABEL = { deposit: 'Deposit', withdrawal: 'Withdrawal' }
+    const TYPE_LABEL = { deposit: 'Deposit', withdrawal: 'Withdrawal', adjustment: 'Admin credit' }
     const paintRows = () => {
       const items = data?.items || []
       $('#p-rows', root).innerHTML = items.length ? items.map((t) => {
-        const dep = t.type === 'deposit', amt = Math.abs(t.amount)
+        const dep = t.type !== 'withdrawal', amt = Math.abs(t.amount)
         const pending = !dep && t.status === 'pending'
         return `<tr class="hover:bg-gray-50/50">
           <td data-label="Date" class="p-3 text-gray-500 whitespace-nowrap">${esc(fmtDateTime(t.created))}</td>
-          <td data-label="User" class="p-3 font-bold text-gray-900">${esc(t.user.name || '—')}<span class="block text-[11px] text-gray-400 font-normal break-all">${esc(t.user.email)}</span></td>
-          <td data-label="Type" class="p-3"><span class="${dep ? 'text-emerald-700 bg-emerald-50' : 'text-indigo-700 bg-indigo-50'} px-2 py-0.5 rounded-md text-[10px] font-bold uppercase">${TYPE_LABEL[t.type] || esc(t.type)}</span></td>
+          <td data-label="User" class="p-3 font-bold text-gray-900"><button type="button" data-uview="${esc(t.user.id)}" class="font-bold text-gray-900 hover:text-red-600 hover:underline text-left">${esc(t.user.name || '—')}</button><span class="block text-[11px] text-gray-400 font-normal break-all">${esc(t.user.email)}</span></td>
+          <td data-label="Type" class="p-3"><span class="${t.type === 'adjustment' ? 'text-sky-700 bg-sky-50' : dep ? 'text-emerald-700 bg-emerald-50' : 'text-indigo-700 bg-indigo-50'} px-2 py-0.5 rounded-md text-[10px] font-bold uppercase">${TYPE_LABEL[t.type] || esc(t.type)}</span></td>
           <td data-label="Method" class="p-3 text-gray-600">${esc(t.method)}${t.note ? `<span class="block text-[10px] text-gray-400">${esc(t.note)}</span>` : ''}</td>
           <td data-label="Amount" class="p-3 font-bold whitespace-nowrap ${dep ? 'text-emerald-600' : 'text-gray-900'}">${dep ? '+' : '−'}${fmt(amt)}</td>
           <td data-label="Status" class="p-3">${badge(t.status, !dep && t.status === 'failed' ? 'Rejected' : t.status)}</td>
@@ -128,6 +129,7 @@ export default {
     $('#p-prev', root).onclick = () => { if (f.page > 1) { f.page--; load() } }
     $('#p-next', root).onclick = () => { if (data?.hasMore) { f.page++; load() } }
     const onClick = (e) => {
+      const uv = e.target.closest('[data-uview]'); if (uv) return openUserProfile(uv.dataset.uview, { onBalance: () => load() })
       if (e.target.closest('[data-quick]')) { $('#p-search', root).value = ''; return setFilter({ type: 'withdrawal', status: 'pending', q: '' }) }
       const b = e.target.closest('[data-act]'); if (b) settle(b.dataset.act, b.dataset.id)
     }

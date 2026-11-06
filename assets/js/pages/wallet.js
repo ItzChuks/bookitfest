@@ -3,7 +3,7 @@ import { state, me, fmt, toUSD, fromUSD, currencyLabel, refreshMe, bus } from '.
 import { TIER_NAMES } from '../components.js'
 import { $, esc, fmtDay, fmtDateTime, badge, openModal, closeButton, setBusy, toast, emptyState, renderQR, isPast } from '../ui.js'
 
-const TX = { deposit: 'Deposit', withdrawal: 'Withdrawal', ticket: 'Event Ticket Pass', ticket_sale: 'Ticket Sale', lucky_entry: 'Lucky Entry', lucky_win: 'Lucky Win', refund: 'Refund' }
+const TX = { deposit: 'Deposit', withdrawal: 'Withdrawal', ticket: 'Event Ticket Pass', ticket_sale: 'Ticket Sale', lucky_entry: 'Lucky Entry', lucky_win: 'Lucky Win', refund: 'Refund', adjustment: 'Admin Credit' }
 
 export default {
   title: 'My Wallet',

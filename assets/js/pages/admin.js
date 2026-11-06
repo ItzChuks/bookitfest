@@ -4,6 +4,7 @@ import { digitChips } from '../components.js'
 import { $, esc, fmtDateTime, fmtDay, badge, setBusy, toast, confirmBox, openModal, closeButton, emptyState, debounce } from '../ui.js'
 import { bus } from '../state.js'
 import { playSound } from '../audio.js'
+import { openUserProfile } from '../admin-user.js'
 
 export default {
   title: 'Admin Console',
@@ -29,8 +30,8 @@ export default {
         <div class="flex flex-wrap items-center gap-2"><div class="flex bg-gray-100 rounded-xl p-1 text-[11px] font-bold" id="a-utabs" role="tablist">
           ${[['all', 'All'], ['vendor', 'Vendors'], ['user', 'Users'], ['admin', 'Admins']].map(([k, l]) => `<button type="button" role="tab" data-utab="${k}" class="px-3 py-1.5 rounded-lg transition">${l} <span class="opacity-60" data-ucnt="${k}"></span></button>`).join('')}</div>
           <label class="sr-only" for="a-usearch">Search users</label><input id="a-usearch" type="search" placeholder="Search name or email" class="field !py-2 !w-48"></div></div>
-      <div class="overflow-x-auto"><table class="w-full text-left text-xs table-stack"><thead class="bg-gray-50 text-gray-400 uppercase font-bold"><tr><th class="p-3">Name</th><th class="p-3">Email</th><th class="p-3">Role</th><th class="p-3">Activity</th><th class="p-3">Wallet</th><th class="p-3">Joined</th></tr></thead>
-        <tbody class="divide-y divide-gray-100" id="a-users"><tr><td colspan="6" class="p-6 text-center text-gray-400">Loading…</td></tr></tbody></table></div></section>
+      <div class="overflow-x-auto"><table class="w-full text-left text-xs table-stack"><thead class="bg-gray-50 text-gray-400 uppercase font-bold"><tr><th class="p-3">Name</th><th class="p-3">Email</th><th class="p-3">Role</th><th class="p-3">Activity</th><th class="p-3">Wallet</th><th class="p-3">Joined</th><th class="p-3 text-right">Profile</th></tr></thead>
+        <tbody class="divide-y divide-gray-100" id="a-users"><tr><td colspan="7" class="p-6 text-center text-gray-400">Loading…</td></tr></tbody></table></div></section>
 
     <section><a href="admin-payments.html" class="flex flex-wrap items-center justify-between gap-4 bg-gradient-to-r from-indigo-50 to-white border border-indigo-100 hover:border-indigo-300 hover:shadow-md rounded-2xl p-5 transition">
       <div class="flex items-center gap-4"><div class="w-12 h-12 rounded-2xl bg-indigo-100 text-indigo-600 flex items-center justify-center shrink-0"><i class="fas fa-money-bill-transfer text-lg"></i></div>
@@ -66,8 +67,9 @@ export default {
         <td data-label="Role" class="p-3"><span class="${ROLE_STYLES[u.role] || ROLE_STYLES.user} px-2 py-0.5 rounded-md text-[10px] font-bold uppercase">${esc(u.role)}</span></td>
         <td data-label="Activity" class="p-3 text-gray-600">${esc(activity(u))}</td>
         <td data-label="Wallet" class="p-3 font-semibold text-gray-700">${fmt(u.balance)}</td>
-        <td data-label="Joined" class="p-3 text-gray-400 whitespace-nowrap">${esc(fmtDay(u.created))}</td></tr>`).join('')
-        : `<tr><td colspan="6" class="p-6 text-center text-gray-400">${users.length ? 'No accounts match.' : 'No accounts yet.'}</td></tr>`
+        <td data-label="Joined" class="p-3 text-gray-400 whitespace-nowrap">${esc(fmtDay(u.created))}</td>
+        <td data-label="Profile" class="p-3 text-right"><button type="button" data-uview="${esc(u.id)}" aria-label="View profile of ${esc(u.name || u.email)}" class="bg-gray-100 hover:bg-gray-200 text-gray-700 px-3 py-1.5 rounded text-[10px] font-bold transition whitespace-nowrap"><i class="fas fa-user mr-1"></i>View</button></td></tr>`).join('')
+        : `<tr><td colspan="7" class="p-6 text-center text-gray-400">${users.length ? 'No accounts match.' : 'No accounts yet.'}</td></tr>`
     }
     const loadPayInfo = async () => {
       try {
@@ -91,11 +93,16 @@ export default {
         paintEvents()
       } catch (e) { toast(errMsg(e), 'error') }
       try { users = await pb.send('/api/bkf/admin/users'); paintUsers(); paintEvents() }
-      catch (e) { $('#a-users', root).innerHTML = `<tr><td colspan="6" class="p-6 text-center text-red-600">${esc(errMsg(e))}</td></tr>` }
+      catch (e) { $('#a-users', root).innerHTML = `<tr><td colspan="7" class="p-6 text-center text-red-600">${esc(errMsg(e))}</td></tr>` }
       loadDraw(); loadPayInfo()
     }
 
     root.querySelectorAll('[data-utab]').forEach((b) => (b.onclick = () => { utab = b.dataset.utab; paintUsers() }))
+    // Profile + manual wallet credit; keep the list's balance in step when an admin adds funds.
+    $('#a-users', root).addEventListener('click', (e) => {
+      const b = e.target.closest('[data-uview]'); if (!b) return
+      openUserProfile(b.dataset.uview, { onBalance: (id, balance) => { const u = users.find((x) => x.id === id); if (u) { u.balance = balance; paintUsers() } } })
+    })
     $('#a-usearch', root).oninput = debounce((e) => { uq = e.target.value; paintUsers() }, 150)
 
     $('#a-mode', root).onchange = (e) => {

@@ -338,13 +338,13 @@ function paymentsSummary(app) {
 // One page of deposits/withdrawals, newest first, with the account's name/email attached.
 // Fetches one extra row to know whether there is a next page.
 function listPayments(app, q) {
-  const type = q.type === "deposit" || q.type === "withdrawal" ? q.type : ""
+  const type = q.type === "deposit" || q.type === "withdrawal" || q.type === "adjustment" ? q.type : ""
   const status = PAY_STATUSES.includes(q.status) ? q.status : ""
   const search = String(q.q || "").trim().slice(0, 80)
   const perPage = Math.min(Math.max(int(q.perPage) || 20, 5), 100)
   const page = Math.max(int(q.page) || 1, 1)
 
-  const where = [type ? "type = {:type}" : "(type = 'deposit' || type = 'withdrawal')"]
+  const where = [type ? "type = {:type}" : "(type = 'deposit' || type = 'withdrawal' || type = 'adjustment')"]
   const params = {}
   if (type) params.type = type
   if (status) { where.push("status = {:status}"); params.status = status }
@@ -369,7 +369,37 @@ function listPayments(app, q) {
   }
 }
 
+// Everything an admin wants to see on one account: details, totals, recent wallet activity and tickets.
+function userProfile(app, u) {
+  const rows = arrayOf(new DynamicModel({ type: "", status: "", n: 0, total: 0 }))
+  app.db().newQuery("SELECT type, status, COUNT(*) AS n, COALESCE(SUM(ABS(amount)), 0) AS total FROM transactions WHERE user = {:id} GROUP BY type, status").bind({ id: u.id }).all(rows)
+  const sum = (type, status) => rows.filter((r) => r.type === type && (!status || r.status === status)).reduce((a, r) => a + r.total, 0)
+  const cnt = (type, status) => rows.filter((r) => r.type === type && (!status || r.status === status)).reduce((a, r) => a + r.n, 0)
+
+  const txs = app.findRecordsByFilter("transactions", "user = {:id}", "-created", 15, 0, { id: u.id })
+  const tickets = app.findRecordsByFilter("tickets", "user = {:id}", "-created", 8, 0, { id: u.id })
+  const titles = {}
+  const evIds = []
+  for (const t of tickets) { const id = t.getString("event"); if (id && !evIds.includes(id)) evIds.push(id) }
+  if (evIds.length) for (const ev of app.findRecordsByIds("events", evIds)) titles[ev.id] = ev.getString("title")
+
+  return {
+    user: { id: u.id, name: u.getString("name"), email: u.email(), role: u.getString("role") || "user", balance: u.getFloat("balance"), verified: u.verified(), created: u.getString("created") },
+    stats: {
+      tickets: app.countRecords("tickets", $dbx.hashExp({ user: u.id })),
+      events: app.countRecords("events", $dbx.hashExp({ vendor: u.id })),
+      deposited: money(sum("deposit", "completed")), depositCount: cnt("deposit", "completed"),
+      withdrawn: money(sum("withdrawal", "completed")), withdrawalPending: money(sum("withdrawal", "pending")),
+      credited: money(sum("adjustment", "completed")),
+      salesEarned: money(sum("ticket_sale", "completed")),
+    },
+    transactions: txs.map((t) => ({ id: t.id, type: t.getString("type"), method: t.getString("method"), amount: t.getFloat("amount"), status: t.getString("status"), note: t.getString("note"), created: t.getString("created") })),
+    tickets: tickets.map((t) => ({ id: t.id, event: titles[t.getString("event")] || "Event", tier: t.getString("tier"), price: t.getFloat("price"), status: t.getString("status"), code: t.getString("code"), created: t.getString("created") })),
+  }
+}
+
 module.exports = {
+  userProfile,
   TIERS, TIER_LABEL, tierSold, availability, shortfall, capacityProblem, paymentsSummary, listPayments,
   CFG, money, int, simulatedPaymentsEnabled, randomCode, logTx, findOpenDraw, ensureOpenDraw, seedDemo,
   issueTickets, flwEnabled, flwCurrency, flwChargeAmount, flwRequest, flwVerify, frontendOrigin, fulfillFlutterwave,

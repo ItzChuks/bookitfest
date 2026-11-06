@@ -180,6 +180,40 @@ routerAdd("GET", "/api/bkf/admin/users", (e) => {
   })))
 }, $apis.requireAuth())
 
+// ---- Admin: one user's profile, and manual wallet credits ----
+routerAdd("GET", "/api/bkf/admin/users/{id}", (e) => {
+  const lib = require(`${__hooks}/bkf_lib.js`)
+  if (e.auth.getString("role") !== "admin") throw new ForbiddenError("Admins only.")
+  let u
+  try { u = $app.findRecordById("users", e.request.pathValue("id")) } catch (_) { throw new NotFoundError("User not found.") }
+  return e.json(200, lib.userProfile($app, u))
+}, $apis.requireAuth())
+
+// Admin adds money to a wallet (amount is in USD, like every balance). A reason is required and is
+// written to the user's transaction history together with the admin's name.
+routerAdd("POST", "/api/bkf/admin/users/{id}/credit", (e) => {
+  const lib = require(`${__hooks}/bkf_lib.js`)
+  const MAX_ADMIN_CREDIT_USD = 10000 // typo guard; handlers can't see top-level variables, so it lives here
+  if (e.auth.getString("role") !== "admin") throw new ForbiddenError("Admins only.")
+  const body = e.requestInfo().body
+  const amount = lib.money(body.amount)
+  if (!(amount >= 0.01 && amount <= MAX_ADMIN_CREDIT_USD)) throw new BadRequestError(`Enter an amount between $0.01 and $${String(MAX_ADMIN_CREDIT_USD).replace(/\B(?=(\d{3})+(?!\d))/g, ",")}.`)
+  const note = String(body.note || "").trim().slice(0, 150)
+  if (note.length < 3) throw new BadRequestError("Add a short reason for this credit.")
+
+  const adminName = e.auth.getString("name") || e.auth.email()
+  let balance = 0
+  $app.runInTransaction((tx) => {
+    let u
+    try { u = tx.findRecordById("users", e.request.pathValue("id")) } catch (_) { throw new NotFoundError("User not found.") }
+    balance = lib.money(u.getFloat("balance") + amount)
+    u.set("balance", balance)
+    tx.save(u)
+    lib.logTx(tx, u.id, "adjustment", "Admin credit", amount, "completed", `Added by ${adminName}: ${note}`)
+  })
+  return e.json(200, { balance: balance, amount: amount })
+}, $apis.requireAuth())
+
 // ---- Ticket availability per tier (public, so the event page can show "12 left" / "Sold out") ----
 routerAdd("GET", "/api/bkf/availability/{id}", (e) => {
   const lib = require(`${__hooks}/bkf_lib.js`)
