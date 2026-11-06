@@ -6,6 +6,7 @@ const PAGE = () => document.body.dataset.page || ''
 import { toggleSound } from './audio.js'
 
 let pendingCount = 0
+let payoutCount = 0
 let menuOpen = false
 
 const ON = 'px-3.5 py-2 rounded-xl text-xs font-bold text-red-600 bg-red-50 transition'
@@ -13,21 +14,25 @@ const OFF = 'px-3.5 py-2 rounded-xl text-xs font-bold text-gray-600 hover:text-r
 
 function navItems() {
   const u = me()
+  const admin = u?.role === 'admin' // admins get six links, so the desktop labels are shortened to fit one row
   const items = [
-    { href: 'events.html', icon: 'fa-calendar-alt', label: 'Events Marketplace', pages: ['events', 'event'] },
-    { href: 'lucky.html', icon: 'fa-dice-five text-amber-500', label: 'Lucky 5 Games', pages: ['lucky'], pulse: true },
+    { href: 'events.html', icon: 'fa-calendar-alt', label: 'Events Marketplace', short: 'Events', pages: ['events', 'event'] },
+    { href: 'lucky.html', icon: 'fa-dice-five text-amber-500', label: 'Lucky 5 Games', short: 'Lucky 5', pages: ['lucky'], pulse: true },
   ]
-  if (!u || u.role !== 'user') items.push({ href: 'vendor.html', icon: 'fa-store text-red-500', label: u ? 'Vendor Dashboard' : 'Sell Tickets', pages: ['vendor'] })
-  if (u?.role === 'admin') items.push({ href: 'admin.html', icon: 'fa-user-shield text-indigo-500', label: 'Admin Console', pages: ['admin'], badge: pendingCount })
-  if (u) items.push({ href: 'wallet.html', icon: 'fa-wallet', label: 'My Wallet', pages: ['wallet'] })
-  return items
+  if (!u || u.role !== 'user') items.push({ href: 'vendor.html', icon: 'fa-store text-red-500', label: u ? 'Vendor Dashboard' : 'Sell Tickets', short: 'Vendor', pages: ['vendor'] })
+  if (admin) {
+    items.push({ href: 'admin.html', icon: 'fa-user-shield text-indigo-500', label: 'Admin Console', short: 'Admin', pages: ['admin'], badge: pendingCount })
+    items.push({ href: 'admin-payments.html', icon: 'fa-money-bill-transfer text-indigo-500', label: 'Payments', short: 'Payments', pages: ['admin-payments'], badge: payoutCount })
+  }
+  if (u) items.push({ href: 'wallet.html', icon: 'fa-wallet', label: 'My Wallet', short: 'Wallet', pages: ['wallet'] })
+  return items.map((i) => ({ ...i, desktopLabel: admin ? i.short : i.label }))
 }
 
 function navLinks(page, mobile) {
   return navItems().map((i) => {
     const active = i.pages.includes(page)
-    const cls = (active ? ON : OFF) + (mobile ? ' flex items-center py-3 text-sm' : ' relative')
-    return `<a href="${i.href}" class="${cls}" ${active ? 'aria-current="page"' : ''}><i class="fas ${i.icon} mr-1.5"></i> ${i.label}
+    const cls = (active ? ON : OFF) + (mobile ? ' flex items-center py-3 text-sm' : ' relative whitespace-nowrap')
+    return `<a href="${i.href}" class="${cls}" ${mobile ? '' : `title="${i.label}"`} ${active ? 'aria-current="page"' : ''}><i class="fas ${i.icon} mr-1.5"></i> ${mobile ? i.label : i.desktopLabel}
       ${i.pulse && !mobile ? '<span class="absolute -top-1 -right-1 flex h-2.5 w-2.5"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span><span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-600"></span></span>' : ''}
       ${i.badge ? `<span class="ml-1 bg-red-600 text-white text-[9px] font-black px-1.5 py-0.5 rounded-full">${i.badge}</span>` : ''}</a>`
   }).join('')
@@ -85,13 +90,14 @@ export function renderFooter() {
         <p class="text-xs text-gray-500 mt-2">Verified multivendor event passes and the Lucky 5 draw.</p></div>
       <nav class="flex flex-wrap justify-center gap-x-5 gap-y-2 text-xs font-bold text-gray-500" aria-label="Footer">
         <a href="events.html" class="hover:text-red-600">Events</a><a href="lucky.html" class="hover:text-red-600">Lucky 5</a>
-        <a href="vendor.html" class="hover:text-red-600">Vendor Portal</a>${u?.role === 'admin' ? '<a href="admin.html" class="hover:text-red-600">Admin Dashboard</a>' : ''}</nav></div>
+        <a href="vendor.html" class="hover:text-red-600">Vendor Portal</a>${u?.role === 'admin' ? '<a href="admin.html" class="hover:text-red-600">Admin Dashboard</a><a href="admin-payments.html" class="hover:text-red-600">Payments</a>' : ''}</nav></div>
     <p class="text-[11px] text-gray-400 text-center">Lucky 5 is for adults aged 18 and over. Play responsibly. &copy; ${new Date().getFullYear()} Bookitfest Inc. All rights reserved.</p></div></footer>`
 }
 
 export async function refreshPending() {
-  if (me()?.role !== 'admin') { pendingCount = 0; return }
+  if (me()?.role !== 'admin') { pendingCount = 0; payoutCount = 0; return }
   try { pendingCount = (await pb.collection('events').getList(1, 1, { filter: 'status = "pending"', fields: 'id' })).totalItems } catch { /* ignore */ }
+  try { payoutCount = (await pb.send('/api/bkf/admin/payments', { query: { type: 'withdrawal', status: 'pending', perPage: 5 } })).summary.withdrawalsPendingCount } catch { /* ignore */ }
   renderHeader()
 }
 bus.on('pending', refreshPending)

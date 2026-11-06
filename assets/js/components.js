@@ -10,6 +10,12 @@ export const CATEGORIES = [
 // Uploaded cover (stored by PocketBase) first, then the legacy image link, then the placeholder.
 export const evtImage = (e) => (e.image ? pb.files.getURL(e, e.image) : e.image_url || PLACEHOLDER_IMG)
 
+// Cheapest tier the vendor actually sells (falls back to Early Bird for events created before tiers had quantities).
+export const fromPrice = (e) => {
+  const offered = ['early', 'regular', 'vip'].filter((t) => (Number(e['qty_' + t]) || 0) > 0).map((t) => e['price_' + t])
+  return offered.length ? Math.min(...offered) : e.price_early
+}
+
 export function eventCard(e) {
   return `<article class="bg-white rounded-3xl overflow-hidden shadow-sm border border-gray-100 hover:shadow-xl transition group flex flex-col">
     <a href="event.html?id=${esc(e.id)}" class="relative h-48 overflow-hidden block">
@@ -23,7 +29,7 @@ export function eventCard(e) {
       <p class="text-[11px] text-gray-400 font-semibold">Hosted by: ${esc(e.vendor_name || 'Verified vendor')}</p>
       <div class="pt-3 mt-auto border-t border-gray-100 flex items-center justify-between">
         <div><span class="text-[10px] text-gray-400 uppercase font-bold block">Starts From</span>
-          <span class="text-lg font-extrabold text-gray-900" data-price="${e.price_early}">${fmt(e.price_early)}</span></div>
+          <span class="text-lg font-extrabold text-gray-900" data-price="${fromPrice(e)}">${fmt(fromPrice(e))}</span></div>
         <a href="event.html?id=${esc(e.id)}" class="bg-red-600 hover:bg-red-700 text-white text-xs font-bold px-4 py-2.5 rounded-xl shadow-md shadow-red-200 transition">Buy Ticket</a>
       </div>
     </div></article>`

@@ -76,3 +76,13 @@ Ticket purchases and wallet top-ups use Flutterwave's hosted checkout (cards, ba
 **3. Push** the new files. The migration `1760000001_payments.js` creates a `payments` collection automatically on boot (server-only, no public access).
 
 Prices are stored in USD and charged in NGN at `FLW_NGN_RATE` by default. Test first with test keys, then switch to live keys.
+
+## Ticket tiers & payments portal (latest changes)
+
+- **Tier quantities.** Each event has `qty_early`, `qty_regular` and `qty_vip` (0 = tier not offered). Vendors set them
+  when creating or editing an event and can never set a tier below what is already sold. Purchases are checked against
+  remaining stock on the server; public stock is at `GET /api/bkf/availability/{eventId}`.
+  Migration `1760000004_ticket_tiers.js` gives existing events 500 per tier.
+- **Admin payments portal.** `admin-payments.html` lists every deposit and withdrawal (`GET /api/bkf/admin/payments`).
+  Admins pay out or reject withdrawals via `POST /api/bkf/admin/withdrawal` (`{id, action: "pay"|"reject", note}`);
+  rejecting refunds the wallet. Transaction records can no longer be edited directly from the browser.

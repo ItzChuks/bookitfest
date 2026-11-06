@@ -13,6 +13,57 @@ const CFG = {
 function money(n) { return Math.round(Number(n) * 100) / 100 }
 function int(n) { n = Math.floor(Number(n)); return isFinite(n) && n > 0 ? n : 0 }
 
+// ---------------------------------------------------------------------------
+// Ticket tiers: each event has a capacity per tier (qty_early / qty_regular / qty_vip).
+// 0 means the vendor doesn't sell that tier.
+// ---------------------------------------------------------------------------
+const TIERS = ["early", "regular", "vip"]
+const TIER_LABEL = { early: "Early Bird", regular: "Regular", vip: "VIP" }
+
+function tierSold(app, eventId, tier) {
+  return app.countRecords("tickets", $dbx.hashExp({ event: eventId, tier: tier }))
+}
+
+// { early: {capacity, sold, left}, regular: {...}, vip: {...} }
+function availability(app, event) {
+  const out = {}
+  for (const t of TIERS) {
+    const capacity = event.getInt("qty_" + t)
+    const sold = tierSold(app, event.id, t)
+    out[t] = { capacity: capacity, sold: sold, left: Math.max(0, capacity - sold) }
+  }
+  return out
+}
+
+// Returns "" when the order fits, otherwise a sentence explaining which tier is short.
+function shortfall(app, event, qty) {
+  const a = availability(app, event)
+  for (const t of TIERS) {
+    if (qty[t] > a[t].left) {
+      if (a[t].capacity === 0) return `${TIER_LABEL[t]} tickets aren't offered for this event.`
+      if (a[t].left === 0) return `${TIER_LABEL[t]} tickets are sold out.`
+      return `Only ${a[t].left} ${TIER_LABEL[t]} ticket${a[t].left === 1 ? "" : "s"} left.`
+    }
+  }
+  return ""
+}
+
+// Validates the capacities on an event record a vendor is saving.
+// Returns "" when fine. `checkSold` stops a vendor from setting a tier below what is already sold.
+function capacityProblem(app, rec, checkSold) {
+  let total = 0
+  for (const t of TIERS) {
+    const cap = rec.getInt("qty_" + t)
+    total += cap
+    if (checkSold && rec.id) {
+      const sold = tierSold(app, rec.id, t)
+      if (cap < sold) return `${sold} ${TIER_LABEL[t]} ticket${sold === 1 ? " is" : "s are"} already sold, so you can't offer fewer than that.`
+    }
+  }
+  if (total < 1) return "Offer at least one ticket in one of the tiers."
+  return ""
+}
+
 // Gateways other than the in-app wallet are simulated until a real provider
 // (Paystack / Flutterwave) is wired in. They only work when this env var is set.
 function simulatedPaymentsEnabled() { return $os.getenv("BKF_SIMULATE_PAYMENTS") === "1" }
@@ -76,26 +127,27 @@ function seedDemo(app) {
 
   if (app.countRecords("events") === 0) {
     const col = app.findCollectionByNameOrId("events")
-    const add = (title, category, iso, location, image, status, vendorName, early, regular, vip, description) => {
+    const add = (title, category, iso, location, image, status, vendorName, early, regular, vip, qty, description) => {
       const r = new Record(col)
       r.set("title", title); r.set("category", category); r.set("starts_at", iso)
       r.set("location", location); r.set("image_url", image); r.set("status", status)
       r.set("vendor", vendor.id); r.set("vendor_name", vendorName)
       r.set("price_early", early); r.set("price_regular", regular); r.set("price_vip", vip)
+      r.set("qty_early", qty[0]); r.set("qty_regular", qty[1]); r.set("qty_vip", qty[2])
       r.set("description", description)
       app.save(r)
     }
     add("Bookitfest Mega Concert 2026", "Music Festival", "2026-11-15 18:00:00.000Z", "Eko Atlantic City, Lagos",
       "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?auto=format&fit=crop&w=1200&q=80",
-      "approved", "Afrobeat Empire Ltd", 45, 75, 200,
+      "approved", "Afrobeat Empire Ltd", 45, 75, 200, [200, 800, 50],
       "A full night of live Afrobeats on the Atlantic waterfront. Gates open at 4 PM, headline sets from 8 PM.")
     add("Global Web3 & Tech Summit", "Tech Conference", "2026-12-02 09:00:00.000Z", "Landmark Centre, Victoria Island",
       "https://images.unsplash.com/photo-1540575467063-178a50c2df87?auto=format&fit=crop&w=1200&q=80",
-      "approved", "NaijaTech Ventures", 30, 60, 250,
+      "approved", "NaijaTech Ventures", 30, 60, 250, [100, 300, 40],
       "One day of talks, workshops and demos from builders across West Africa. VIP includes the speakers' dinner.")
     add("Lagos Cultural & Culinary Fair", "Cultural Fair", "2026-12-18 12:00:00.000Z", "TBS Square, Lagos Island",
       "https://images.unsplash.com/photo-1555939594-58d7cb561ad1?auto=format&fit=crop&w=1200&q=80",
-      "pending", "Heritage Festive Guild", 15, 35, 100,
+      "pending", "Heritage Festive Guild", 15, 35, 100, [150, 400, 0],
       "Street food, crafts and live performances celebrating Lagos culture.")
   }
 
@@ -234,11 +286,22 @@ function fulfillFlutterwave(app, reference, data) {
       result = { amount: amount }
     } else {
       const event = tx.findRecordById("events", payload.eventId)
-      const tickets = issueTickets(tx, {
-        userId: userId, event: event, qty: payload.qty, price: payload.price,
-        name: payload.name, email: payload.email, method: "Flutterwave", total: amount,
-      })
-      result = { tickets: tickets, total: amount, eventId: event.id }
+      const short = shortfall(tx, event, payload.qty)
+      if (short) {
+        // Someone else took the last tickets while this buyer was on the payment page.
+        // The money has been collected, so put it in their wallet rather than oversell.
+        const u = tx.findRecordById("users", userId)
+        u.set("balance", money(u.getFloat("balance") + amount))
+        tx.save(u)
+        logTx(tx, userId, "refund", "Flutterwave", amount, "completed", "Tickets sold out before payment cleared. Refunded to wallet.")
+        result = { refunded: true, amount: amount, eventId: event.id, message: `${short} Your payment of the full amount was added to your Bookitfest wallet.` }
+      } else {
+        const tickets = issueTickets(tx, {
+          userId: userId, event: event, qty: payload.qty, price: payload.price,
+          name: payload.name, email: payload.email, method: "Flutterwave", total: amount,
+        })
+        result = { tickets: tickets, total: amount, eventId: event.id }
+      }
     }
     p.set("status", "paid")
     p.set("result", JSON.stringify(result))
@@ -248,7 +311,66 @@ function fulfillFlutterwave(app, reference, data) {
   return out
 }
 
+// ---------------------------------------------------------------------------
+// Admin payments portal (deposits + withdrawals)
+// ---------------------------------------------------------------------------
+const PAY_STATUSES = ["pending", "completed", "failed"]
+
+// Totals across every deposit / withdrawal ever made (not affected by the page filters).
+function paymentsSummary(app) {
+  const rows = arrayOf(new DynamicModel({ type: "", status: "", n: 0, total: 0 }))
+  app.db().newQuery("SELECT type, status, COUNT(*) AS n, COALESCE(SUM(ABS(amount)), 0) AS total FROM transactions WHERE type IN ('deposit', 'withdrawal') GROUP BY type, status").all(rows)
+  const s = {
+    depositsCount: 0, depositsTotal: 0,
+    withdrawalsPendingCount: 0, withdrawalsPendingTotal: 0,
+    withdrawalsPaidCount: 0, withdrawalsPaidTotal: 0,
+    withdrawalsRejectedCount: 0,
+  }
+  for (const r of rows) {
+    if (r.type === "deposit" && r.status === "completed") { s.depositsCount += r.n; s.depositsTotal = money(s.depositsTotal + r.total) }
+    else if (r.type === "withdrawal" && r.status === "pending") { s.withdrawalsPendingCount += r.n; s.withdrawalsPendingTotal = money(s.withdrawalsPendingTotal + r.total) }
+    else if (r.type === "withdrawal" && r.status === "completed") { s.withdrawalsPaidCount += r.n; s.withdrawalsPaidTotal = money(s.withdrawalsPaidTotal + r.total) }
+    else if (r.type === "withdrawal" && r.status === "failed") { s.withdrawalsRejectedCount += r.n }
+  }
+  return s
+}
+
+// One page of deposits/withdrawals, newest first, with the account's name/email attached.
+// Fetches one extra row to know whether there is a next page.
+function listPayments(app, q) {
+  const type = q.type === "deposit" || q.type === "withdrawal" ? q.type : ""
+  const status = PAY_STATUSES.includes(q.status) ? q.status : ""
+  const search = String(q.q || "").trim().slice(0, 80)
+  const perPage = Math.min(Math.max(int(q.perPage) || 20, 5), 100)
+  const page = Math.max(int(q.page) || 1, 1)
+
+  const where = [type ? "type = {:type}" : "(type = 'deposit' || type = 'withdrawal')"]
+  const params = {}
+  if (type) params.type = type
+  if (status) { where.push("status = {:status}"); params.status = status }
+  if (search) { where.push("(user.name ~ {:q} || user.email ~ {:q} || method ~ {:q})"); params.q = search }
+
+  const rows = app.findRecordsByFilter("transactions", where.join(" && "), "-created", perPage + 1, (page - 1) * perPage, params)
+  const hasMore = rows.length > perPage
+  const pageRows = rows.slice(0, perPage)
+
+  const ids = []
+  for (const r of pageRows) { const id = r.getString("user"); if (id && !ids.includes(id)) ids.push(id) }
+  const people = {}
+  if (ids.length) for (const u of app.findRecordsByIds("users", ids)) people[u.id] = { id: u.id, name: u.getString("name"), email: u.email(), role: u.getString("role") || "user" }
+
+  return {
+    page: page, perPage: perPage, hasMore: hasMore,
+    items: pageRows.map((t) => ({
+      id: t.id, type: t.getString("type"), method: t.getString("method"), amount: t.getFloat("amount"),
+      status: t.getString("status"), note: t.getString("note"), created: t.getString("created"), updated: t.getString("updated"),
+      user: people[t.getString("user")] || { id: t.getString("user"), name: "", email: "", role: "" },
+    })),
+  }
+}
+
 module.exports = {
+  TIERS, TIER_LABEL, tierSold, availability, shortfall, capacityProblem, paymentsSummary, listPayments,
   CFG, money, int, simulatedPaymentsEnabled, randomCode, logTx, findOpenDraw, ensureOpenDraw, seedDemo,
   issueTickets, flwEnabled, flwCurrency, flwChargeAmount, flwRequest, flwVerify, frontendOrigin, fulfillFlutterwave,
 }

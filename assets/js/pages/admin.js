@@ -10,7 +10,7 @@ export default {
   render: () => `<div class="space-y-8"><div class="bg-white rounded-3xl p-5 sm:p-8 border border-red-100 shadow-xl space-y-6">
     <div class="border-b border-gray-100 pb-6"><span class="bg-indigo-100 text-indigo-700 text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-wider">Super Admin Console</span>
       <h1 class="text-2xl sm:text-3xl font-black text-gray-900 mt-2">Approvals, Users & Draw Management</h1>
-      <p class="text-xs text-gray-500 mt-1 max-w-2xl">Review vendor submissions, see every vendor and user on the site, and run the Lucky 5 draw automatically or with a manual outcome.</p></div>
+      <p class="text-xs text-gray-500 mt-1 max-w-2xl">Review vendor submissions, see every vendor and user on the site, manage deposits and withdrawals, and run the Lucky 5 draw automatically or with a manual outcome.</p></div>
 
     <div class="bg-slate-900 text-white p-5 sm:p-6 rounded-2xl space-y-4">
       <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-3"><h2 class="text-xs font-bold text-amber-400 uppercase tracking-widest"><i class="fas fa-dice mr-1"></i> Admin Lucky 5 Winner Controller</h2>
@@ -32,17 +32,18 @@ export default {
       <div class="overflow-x-auto"><table class="w-full text-left text-xs table-stack"><thead class="bg-gray-50 text-gray-400 uppercase font-bold"><tr><th class="p-3">Name</th><th class="p-3">Email</th><th class="p-3">Role</th><th class="p-3">Activity</th><th class="p-3">Wallet</th><th class="p-3">Joined</th></tr></thead>
         <tbody class="divide-y divide-gray-100" id="a-users"><tr><td colspan="6" class="p-6 text-center text-gray-400">Loading…</td></tr></tbody></table></div></section>
 
-    <section><h2 class="font-bold text-gray-900 text-lg mb-3">Withdrawal requests</h2>
-      <div class="overflow-x-auto"><table class="w-full text-left text-xs table-stack"><thead class="bg-gray-50 text-gray-400 uppercase font-bold"><tr><th class="p-3">User</th><th class="p-3">Bank / Account</th><th class="p-3">Amount</th><th class="p-3">Requested</th><th class="p-3 text-right">Action</th></tr></thead>
-        <tbody class="divide-y divide-gray-100" id="a-wd"><tr><td colspan="5" class="p-6 text-center text-gray-400">Loading…</td></tr></tbody></table></div></section></div></div>`,
+    <section><a href="admin-payments.html" class="flex flex-wrap items-center justify-between gap-4 bg-gradient-to-r from-indigo-50 to-white border border-indigo-100 hover:border-indigo-300 hover:shadow-md rounded-2xl p-5 transition">
+      <div class="flex items-center gap-4"><div class="w-12 h-12 rounded-2xl bg-indigo-100 text-indigo-600 flex items-center justify-center shrink-0"><i class="fas fa-money-bill-transfer text-lg"></i></div>
+        <div><h2 class="font-bold text-gray-900 text-lg">Deposits & Withdrawals</h2><p class="text-xs text-gray-500" id="a-pay-info">Loading…</p></div></div>
+      <span class="text-xs font-bold text-indigo-700 bg-indigo-100 px-4 py-2.5 rounded-xl whitespace-nowrap">Open payments portal <i class="fas fa-arrow-right ml-1"></i></span></a></section></div></div>`,
 
   async mount(ctx, root) {
-    let events = [], wds = [], draw = null, users = [], utab = 'all', uq = ''
+    let events = [], draw = null, users = [], utab = 'all', uq = ''
     const paintEvents = () => {
       $('#a-events', root).innerHTML = events.length ? events.map((e) => `<tr class="hover:bg-gray-50/50">
         <td data-label="Event" class="p-3"><span class="font-bold text-gray-900 block">${esc(e.title)}</span><span class="text-[11px] text-gray-400">${esc(e.vendor_name)} • ${esc(fmtDateTime(e.starts_at))}</span></td>
         <td data-label="Category" class="p-3 text-gray-600">${esc(e.category)}</td>
-        <td data-label="Tiers" class="p-3 text-gray-600 whitespace-nowrap">${fmt(e.price_early)} / ${fmt(e.price_regular)} / ${fmt(e.price_vip)}</td>
+        <td data-label="Tiers" class="p-3 text-gray-600 text-[11px] leading-5">${['early', 'regular', 'vip'].map((t) => `<span class="block whitespace-nowrap"><span class="text-gray-400 font-bold uppercase text-[9px] inline-block w-14">${{ early: 'Early', regular: 'Regular', vip: 'VIP' }[t]}</span>${e['qty_' + t] > 0 ? `${fmt(e['price_' + t])} <span class="text-gray-400">× ${Number(e['qty_' + t]).toLocaleString()}</span>` : '<span class="text-gray-300">not offered</span>'}</span>`).join('')}</td>
         <td data-label="Status" class="p-3">${badge(e.status)}</td>
         <td data-label="Actions" class="p-3 text-right whitespace-nowrap">
           ${e.status !== 'approved' ? `<button data-ev="${esc(e.id)}" data-to="approved" class="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded text-[10px] font-bold transition">Approve</button>` : ''}
@@ -68,11 +69,13 @@ export default {
         <td data-label="Joined" class="p-3 text-gray-400 whitespace-nowrap">${esc(fmtDay(u.created))}</td></tr>`).join('')
         : `<tr><td colspan="6" class="p-6 text-center text-gray-400">${users.length ? 'No accounts match.' : 'No accounts yet.'}</td></tr>`
     }
-    const paintWd = () => {
-      $('#a-wd', root).innerHTML = wds.length ? wds.map((t) => `<tr><td data-label="User" class="p-3 font-bold text-gray-900">${esc(t.expand?.user?.name || '')}<span class="block text-[11px] text-gray-400 font-normal">${esc(t.expand?.user?.email || '')}</span></td>
-        <td data-label="Bank" class="p-3 text-gray-600">${esc(t.method)}</td><td data-label="Amount" class="p-3 font-bold">${fmt(Math.abs(t.amount))}</td><td data-label="Requested" class="p-3 text-gray-400">${esc(fmtDay(t.created))}</td>
-        <td data-label="Action" class="p-3 text-right"><button data-wd="${esc(t.id)}" class="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded text-[10px] font-bold">Mark paid</button></td></tr>`).join('')
-        : `<tr><td colspan="5" class="p-6 text-center text-gray-400">No pending withdrawals.</td></tr>`
+    const loadPayInfo = async () => {
+      try {
+        const sm = (await pb.send('/api/bkf/admin/payments', { query: { perPage: 5 } })).summary
+        $('#a-pay-info', root).innerHTML = sm.withdrawalsPendingCount
+          ? `<strong class="text-amber-700">${sm.withdrawalsPendingCount} withdrawal${sm.withdrawalsPendingCount === 1 ? '' : 's'} waiting</strong> (${esc(fmt(sm.withdrawalsPendingTotal))}) • ${esc(fmt(sm.depositsTotal))} deposited in total`
+          : `No withdrawals waiting • ${esc(fmt(sm.depositsTotal))} deposited in total`
+      } catch { $('#a-pay-info', root).textContent = 'Review every deposit and withdrawal.' }
     }
     const loadDraw = async () => {
       try {
@@ -84,15 +87,12 @@ export default {
     }
     const load = async () => {
       try {
-        ;[events, wds] = await Promise.all([
-          pb.collection('events').getFullList({ sort: '-created' }),
-          pb.collection('transactions').getFullList({ filter: 'type = "withdrawal" && status = "pending"', sort: 'created', expand: 'user' }),
-        ])
-        paintEvents(); paintWd()
+        events = await pb.collection('events').getFullList({ sort: '-created' })
+        paintEvents()
       } catch (e) { toast(errMsg(e), 'error') }
       try { users = await pb.send('/api/bkf/admin/users'); paintUsers(); paintEvents() }
       catch (e) { $('#a-users', root).innerHTML = `<tr><td colspan="6" class="p-6 text-center text-red-600">${esc(errMsg(e))}</td></tr>` }
-      loadDraw()
+      loadDraw(); loadPayInfo()
     }
 
     root.querySelectorAll('[data-utab]').forEach((b) => (b.onclick = () => { utab = b.dataset.utab; paintUsers() }))
@@ -122,22 +122,19 @@ export default {
       setBusy(btn, false)
     }
     const onClick = async (e) => {
-      const ev = e.target.closest('[data-ev]'), wd = e.target.closest('[data-wd]')
+      const ev = e.target.closest('[data-ev]')
       try {
         if (ev) {
           const to = ev.dataset.to; const rec = events.find((x) => x.id === ev.dataset.ev)
           await pb.collection('events').update(rec.id, { status: to })
           toast(to === 'approved' ? `"${rec.title}" is now live.` : `"${rec.title}" was rejected.`, to === 'approved' ? 'success' : 'info')
           rec.status = to; paintEvents(); bus.emit('pending')
-        } else if (wd) {
-          await pb.collection('transactions').update(wd.dataset.wd, { status: 'completed', note: 'Paid out by admin' })
-          wds = wds.filter((t) => t.id !== wd.dataset.wd); paintWd(); toast('Marked as paid.')
         }
       } catch (err) { toast(errMsg(err), 'error') }
     }
     root.addEventListener('click', onClick)
     load()
-    this._repaint = () => { paintEvents(); paintUsers(); paintWd(); loadDraw() }
+    this._repaint = () => { paintEvents(); paintUsers(); loadDraw(); loadPayInfo() }
     return () => root.removeEventListener('click', onClick)
   },
   onCurrency() { this._repaint?.() },

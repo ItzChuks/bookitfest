@@ -7,6 +7,7 @@ import { playSound } from '../audio.js'
 
 const TIERS = ['early', 'regular', 'vip']
 const price = (evt, t) => evt['price_' + t]
+const leftLabel = (a) => (a.capacity === 0 ? '' : a.left === 0 ? 'Sold out' : a.left <= 10 ? `Only ${a.left} left` : `${a.left} available`)
 
 export default {
   title: 'Event',
@@ -25,10 +26,37 @@ export default {
     document.title = `${evt.title} | Bookitfest`
     const ended = isPast(evt.starts_at)
     const unlisted = evt.status !== 'approved'
-    const bk = { step: 1, qty: { early: 0, regular: 1, vip: 0 }, name: me()?.name || '', email: me()?.email || '', gateway: 'wallet', error: '', tickets: null }
+
+    // How many tickets the vendor is selling per tier and how many are still free.
+    let avail = null
+    const loadAvail = async () => {
+      try { avail = await pb.send(`/api/bkf/availability/${evt.id}`) }
+      catch { avail = Object.fromEntries(TIERS.map((t) => [t, { capacity: evt['qty_' + t] || 0, sold: 0, left: evt['qty_' + t] || 0 }])) }
+    }
+    await loadAvail()
+    const offered = (t) => avail[t].capacity > 0
+    const shown = () => TIERS.filter(offered)
+    const soldOutAll = () => !TIERS.some((t) => avail[t].left > 0)
+    const clampQty = () => TIERS.forEach((t) => { bk.qty[t] = Math.min(bk.qty[t], avail[t].left) })
+
+    const bk = { step: 1, qty: { early: 0, regular: 0, vip: 0 }, name: me()?.name || '', email: me()?.email || '', gateway: 'wallet', error: '', tickets: null }
+    // Start with one ticket in the first tier that still has stock (Regular if it has any).
+    const firstTier = avail.regular.left > 0 ? 'regular' : TIERS.find((t) => avail[t].left > 0)
+    if (firstTier) bk.qty[firstTier] = 1
     const max = () => state.config.maxTicketsPerOrder
     const seats = () => TIERS.reduce((n, t) => n + bk.qty[t], 0)
     const total = () => TIERS.reduce((n, t) => n + bk.qty[t] * price(evt, t), 0)
+
+    function tierTiles() {
+      const list = shown()
+      if (!list.length) return '<p class="text-xs text-gray-400 sm:col-span-3">Ticket tiers for this event haven\'t been announced yet.</p>'
+      return list.map((t) => {
+        const out = avail[t].left === 0
+        return `<div class="rounded-2xl p-4 border ${out ? 'bg-gray-100 border-gray-200 opacity-70' : 'bg-gray-50 border-gray-100'}"><span class="text-[10px] text-gray-400 font-bold uppercase block">${TIER_NAMES[t]}</span>
+          <span class="text-lg font-extrabold text-gray-900 ${out ? 'line-through' : ''}">${fmt(price(evt, t))}</span>
+          <span class="block text-[11px] font-bold mt-0.5 ${out ? 'text-red-600' : avail[t].left <= 10 ? 'text-amber-600' : 'text-emerald-600'}">${leftLabel(avail[t])}</span></div>`
+      }).join('')
+    }
 
     root.innerHTML = `<a href="events.html" class="inline-flex items-center text-xs font-bold text-gray-500 hover:text-red-600 mb-4"><i class="fas fa-arrow-left mr-1.5"></i> All events</a>
       <div class="grid lg:grid-cols-5 gap-6 items-start">
@@ -42,11 +70,12 @@ export default {
               <span><i class="fas fa-map-marker-alt text-red-500 mr-1.5"></i>${esc(evt.location)}</span>
               <span><i class="fas fa-store text-red-500 mr-1.5"></i>Hosted by ${esc(evt.vendor_name || 'a verified vendor')}</span></div>
             ${evt.description ? `<p class="text-sm text-gray-600 leading-relaxed max-w-prose whitespace-pre-line">${esc(evt.description)}</p>` : ''}
-            <div class="grid sm:grid-cols-3 gap-3 pt-2">${TIERS.map((t) => `<div class="bg-gray-50 rounded-2xl p-4 border border-gray-100"><span class="text-[10px] text-gray-400 font-bold uppercase block">${TIER_NAMES[t]}</span><span class="text-lg font-extrabold text-gray-900" data-tier-price="${t}">${fmt(price(evt, t))}</span></div>`).join('')}</div>
+            <div class="grid sm:grid-cols-3 gap-3 pt-2" id="tier-tiles">${tierTiles()}</div>
           </div></article>
         <aside class="lg:col-span-2 lg:sticky lg:top-24 bg-white rounded-3xl overflow-hidden shadow-2xl border border-red-100" id="booking" aria-label="Buy tickets"></aside>
       </div>`
     const panel = $('#booking', root)
+    const paintTiles = () => { const el = $('#tier-tiles', root); if (el) el.innerHTML = tierTiles() }
 
     const steps = () => ['Tickets', 'Attendee', 'Payment'].map((l, i) =>
       `<div class="flex-1 text-center py-1.5 rounded-xl transition-all ${bk.step === i + 1 ? 'bg-white text-red-600 shadow-sm' : 'text-white/70'}">${i + 1}. ${l}</div>`).join('')
@@ -66,16 +95,21 @@ export default {
           <a href="wallet.html" class="block w-full bg-gray-900 text-white font-bold py-3 rounded-2xl text-xs">Done & View Tickets</a></div>`
       }
       const err = bk.error ? `<p class="text-xs font-semibold text-red-600 bg-red-50 border border-red-200 rounded-xl px-3 py-2" role="alert">${esc(bk.error)}</p>` : ''
-      if (bk.step === 1) return `<div class="space-y-4">
+      if (bk.step === 1) {
+        if (soldOutAll()) return `<div class="text-center space-y-3 py-4"><i class="fas fa-ticket-alt text-2xl text-gray-300"></i><p class="font-bold text-gray-700 text-sm">${shown().length ? 'Sold out' : 'No tickets on sale yet'}</p>
+          <p class="text-xs text-gray-500">${shown().length ? 'Every ticket for this event has been sold.' : 'The organiser hasn\'t released tickets for this event.'}</p><a href="events.html" class="inline-block text-red-600 text-xs font-bold hover:underline">Find another event</a></div>`
+        return `<div class="space-y-4">
         <h3 class="text-sm font-bold text-gray-800 uppercase tracking-wider flex justify-between items-center"><span>Choose Pass Tier</span><span class="text-xs text-red-600 font-semibold normal-case"><i class="fas fa-fire mr-1"></i>Selling fast</span></h3>
-        <div class="space-y-3">${TIERS.map((t) => `<div class="border border-gray-200 rounded-2xl p-4 flex items-center justify-between hover:border-red-400 transition bg-white shadow-sm">
-          <div><h4 class="font-bold text-sm text-gray-900">${TIER_NAMES[t]}</h4><p class="text-sm font-extrabold text-red-600">${fmt(price(evt, t))}</p></div>
-          <div class="flex items-center space-x-2 bg-gray-100 p-1.5 rounded-xl">
+        <div class="space-y-3">${shown().map((t) => { const a = avail[t], out = a.left === 0; return `<div class="border ${out ? 'border-gray-100 bg-gray-50' : 'border-gray-200 bg-white hover:border-red-400'} rounded-2xl p-4 flex items-center justify-between transition shadow-sm">
+          <div><h4 class="font-bold text-sm ${out ? 'text-gray-400' : 'text-gray-900'}">${TIER_NAMES[t]}</h4><p class="text-sm font-extrabold ${out ? 'text-gray-400 line-through' : 'text-red-600'}">${fmt(price(evt, t))}</p>
+            <p class="text-[11px] font-bold ${out ? 'text-red-600' : a.left <= 10 ? 'text-amber-600' : 'text-gray-400'}">${leftLabel(a)}</p></div>
+          ${out ? '<span class="text-[10px] font-black uppercase tracking-wider text-red-600 bg-red-50 border border-red-100 rounded-lg px-2.5 py-1.5">Sold out</span>' : `<div class="flex items-center space-x-2 bg-gray-100 p-1.5 rounded-xl">
             <button data-act="qty" data-t="${t}" data-d="-1" aria-label="Remove one ${TIER_NAMES[t]}" class="w-9 h-9 bg-white rounded-lg text-gray-700 font-bold">−</button>
             <span class="w-6 text-center font-bold text-sm text-gray-900" aria-live="polite">${bk.qty[t]}</span>
-            <button data-act="qty" data-t="${t}" data-d="1" aria-label="Add one ${TIER_NAMES[t]}" class="w-9 h-9 bg-white rounded-lg text-gray-700 font-bold">+</button></div></div>`).join('')}</div>
+            <button data-act="qty" data-t="${t}" data-d="1" aria-label="Add one ${TIER_NAMES[t]}" ${bk.qty[t] >= a.left ? 'disabled' : ''} class="w-9 h-9 bg-white rounded-lg text-gray-700 font-bold disabled:opacity-30 disabled:cursor-not-allowed">+</button></div>`}</div>` }).join('')}</div>
         <div class="flex justify-between items-center text-sm font-bold bg-gray-900 text-white rounded-2xl px-4 py-3"><span class="text-red-400">Total</span><span>${fmt(total())}</span></div>
         ${err}<button data-act="next" class="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3.5 rounded-2xl shadow-lg shadow-red-200 flex items-center justify-center space-x-2 transition text-sm"><span>Proceed to Attendee Details</span><i class="fas fa-arrow-right"></i></button></div>`
+      }
       if (bk.step === 2) return `<div class="space-y-4">
         <div><label class="block text-xs font-semibold text-gray-700 mb-1" for="bk-name">Full Name *</label><input class="field" id="bk-name" data-field="name" value="${esc(bk.name)}" autocomplete="name" placeholder="John Doe"></div>
         <div><label class="block text-xs font-semibold text-gray-700 mb-1" for="bk-email">Email Address *</label><input class="field" type="email" id="bk-email" data-field="email" value="${esc(bk.email)}" autocomplete="email" placeholder="john@example.com"><p class="text-[11px] text-gray-400 mt-1">Your tickets are also saved in your wallet.</p></div>
@@ -113,6 +147,7 @@ export default {
       const a = b.dataset.act
       if (a === 'qty') {
         const t = b.dataset.t, d = Number(b.dataset.d)
+        if (d > 0 && bk.qty[t] >= avail[t].left) { bk.error = `Only ${avail[t].left} ${TIER_NAMES[t]} ticket${avail[t].left === 1 ? '' : 's'} left.`; return draw() }
         if (d > 0 && seats() >= max()) { bk.error = `You can buy up to ${max()} tickets per order.`; return draw() }
         bk.qty[t] = Math.max(0, bk.qty[t] + d); bk.error = ''; playSound('click'); draw()
       } else if (a === 'back') go(bk.step - 1)
@@ -132,10 +167,17 @@ export default {
             location.href = url; return
           }
           const res = await post('purchase', { eventId: evt.id, qty: bk.qty, name: bk.name.trim(), email: bk.email.trim(), gateway: bk.gateway })
-          await refreshMe()
+          await refreshMe(); await loadAvail(); paintTiles()
           bk.tickets = res.tickets; bk.error = ''
           playSound('win'); draw(); panel.scrollIntoView({ behavior: 'smooth', block: 'start' })
-        } catch (err) { bk.error = errMsg(err); draw() }
+        } catch (err) {
+          bk.error = errMsg(err)
+          // Stock may have changed under us: refresh it and trim the order so the buyer can try again.
+          await loadAvail(); paintTiles(); clampQty()
+          if (seats() < 1 && !soldOutAll()) { const f = TIERS.find((t) => avail[t].left > 0); if (f) bk.qty[f] = 1 }
+          if (bk.step === 3 && /sold out|left|offered/i.test(bk.error)) bk.step = 1
+          draw()
+        }
       }
     }
     const onField = (e) => {
@@ -162,13 +204,14 @@ export default {
           catch (err) { bk.error = errMsg(err); break }
           if (!res) await new Promise((ok) => setTimeout(ok, 2000))
         }
-        if (res?.tickets) { await refreshMe(); bk.tickets = res.tickets; playSound('win') }
+        if (res?.tickets) { await refreshMe(); await loadAvail(); paintTiles(); bk.tickets = res.tickets; playSound('win') }
+        else if (res?.refunded) { await refreshMe(); await loadAvail(); paintTiles(); clampQty(); bk.step = 1; bk.error = res.message }
         else { bk.step = 3; bk.error ||= "We couldn't confirm your payment. If you were charged, your tickets will appear in your wallet shortly." }
       }
     }
     draw()
 
-    Object.assign(this, { _redraw: () => { $$('[data-tier-price]', root).forEach((el) => (el.textContent = fmt(price(evt, el.dataset.tierPrice)))); draw() } })
+    Object.assign(this, { _redraw: () => { paintTiles(); draw() } })
     return () => { offAuth() }
   },
   onCurrency() { this._redraw?.() },

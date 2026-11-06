@@ -9,6 +9,7 @@ const GATES = {
   wallet: { auth: true, gate: { icon: 'fa-wallet', title: 'Sign in to see your wallet', text: 'Your balance, tickets and transaction history live here.' } },
   vendor: { roles: ['vendor', 'admin'], gate: { icon: 'fa-store', title: 'Vendor accounts only', text: 'Create a vendor account to post events and sell tickets. Admins review every event before it goes live.', vendor: true } },
   admin: { roles: ['admin'], gate: { icon: 'fa-user-shield', title: 'Admin access only', text: 'This console is for Bookitfest admins.' } },
+  'admin-payments': { roles: ['admin'], gate: { icon: 'fa-user-shield', title: 'Admin access only', text: 'This console is for Bookitfest admins.' } },
 }
 
 function gateView(g, user) {

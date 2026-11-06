@@ -4,7 +4,22 @@
 
 // Stamp the vendor's display name server-side so it can't be spoofed.
 onRecordCreateRequest((e) => {
+  const lib = require(`${__hooks}/bkf_lib.js`)
+  const problem = lib.capacityProblem(e.app, e.record, false)
+  if (problem) throw new BadRequestError(problem)
   if (e.auth) e.record.set("vendor_name", e.auth.getString("name") || e.auth.email())
+  e.next()
+}, "events")
+
+// A vendor can change how many tickets they sell per tier, but never below what is already sold.
+onRecordUpdateRequest((e) => {
+  const lib = require(`${__hooks}/bkf_lib.js`)
+  const before = e.record.original()
+  const changed = lib.TIERS.some((t) => before.getInt("qty_" + t) !== e.record.getInt("qty_" + t))
+  if (changed) {
+    const problem = lib.capacityProblem(e.app, e.record, true)
+    if (problem) throw new BadRequestError(problem)
+  }
   e.next()
 }, "events")
 
@@ -59,6 +74,9 @@ routerAdd("POST", "/api/bkf/purchase", (e) => {
     if (event.getDateTime("starts_at").time().unix() < Math.floor(Date.now() / 1000)) {
       throw new BadRequestError("This event has already started.")
     }
+
+    const short = lib.shortfall(tx, event, qty)
+    if (short) throw new BadRequestError(short)
 
     const price = { early: event.getFloat("price_early"), regular: event.getFloat("price_regular"), vip: event.getFloat("price_vip") }
     const total = lib.money(qty.early * price.early + qty.regular * price.regular + qty.vip * price.vip)
@@ -162,6 +180,60 @@ routerAdd("GET", "/api/bkf/admin/users", (e) => {
   })))
 }, $apis.requireAuth())
 
+// ---- Ticket availability per tier (public, so the event page can show "12 left" / "Sold out") ----
+routerAdd("GET", "/api/bkf/availability/{id}", (e) => {
+  const lib = require(`${__hooks}/bkf_lib.js`)
+  let event
+  try { event = $app.findRecordById("events", e.request.pathValue("id")) } catch (_) { throw new NotFoundError("Event not found.") }
+  const mine = e.auth && (e.auth.getString("role") === "admin" || event.getString("vendor") === e.auth.id)
+  if (event.getString("status") !== "approved" && !mine) throw new NotFoundError("Event not found.")
+  return e.json(200, lib.availability($app, event))
+})
+
+// ---- Admin payments portal: every deposit and withdrawal, with totals ----
+routerAdd("GET", "/api/bkf/admin/payments", (e) => {
+  const lib = require(`${__hooks}/bkf_lib.js`)
+  if (e.auth.getString("role") !== "admin") throw new ForbiddenError("Admins only.")
+  const q = e.requestInfo().query
+  return e.json(200, Object.assign({ summary: lib.paymentsSummary($app) }, lib.listPayments($app, q)))
+}, $apis.requireAuth())
+
+// Admin settles a withdrawal request: "pay" marks it paid out, "reject" gives the money back to the wallet.
+routerAdd("POST", "/api/bkf/admin/withdrawal", (e) => {
+  const lib = require(`${__hooks}/bkf_lib.js`)
+  if (e.auth.getString("role") !== "admin") throw new ForbiddenError("Admins only.")
+  const body = e.requestInfo().body
+  const action = String(body.action || "")
+  if (action !== "pay" && action !== "reject") throw new BadRequestError("Unknown action.")
+  const note = String(body.note || "").trim().slice(0, 200)
+  if (action === "reject" && note.length < 3) throw new BadRequestError("Give the user a short reason for rejecting.")
+
+  let status = ""
+  $app.runInTransaction((tx) => {
+    let rec
+    try { rec = tx.findRecordById("transactions", String(body.id || "")) } catch (_) { throw new NotFoundError("Withdrawal not found.") }
+    if (rec.getString("type") !== "withdrawal") throw new BadRequestError("That isn't a withdrawal.")
+    if (rec.getString("status") !== "pending") throw new BadRequestError("This withdrawal has already been handled.")
+    const amount = Math.abs(rec.getFloat("amount"))
+    if (action === "pay") {
+      rec.set("status", "completed")
+      rec.set("note", note ? `Paid out by admin. ${note}` : "Paid out by admin")
+      status = "completed"
+    } else {
+      const userId = rec.getString("user")
+      const u = tx.findRecordById("users", userId)
+      u.set("balance", lib.money(u.getFloat("balance") + amount))
+      tx.save(u)
+      lib.logTx(tx, userId, "refund", "Bookitfest Wallet", amount, "completed", `Withdrawal rejected: ${note}`)
+      rec.set("status", "failed")
+      rec.set("note", `Rejected by admin: ${note}`)
+      status = "failed"
+    }
+    tx.save(rec)
+  })
+  return e.json(200, { id: String(body.id), status: status })
+}, $apis.requireAuth())
+
 // ---- Admin: run the draw ----
 routerAdd("POST", "/api/bkf/admin/draw", (e) => {
   const lib = require(`${__hooks}/bkf_lib.js`)
@@ -262,6 +334,8 @@ routerAdd("POST", "/api/bkf/flw/checkout", (e) => {
     try { event = $app.findRecordById("events", String(body.eventId || "")) } catch (_) { throw new BadRequestError("Event not found.") }
     if (event.getString("status") !== "approved") throw new BadRequestError("This event isn't on sale.")
     if (event.getDateTime("starts_at").time().unix() < Math.floor(Date.now() / 1000)) throw new BadRequestError("This event has already started.")
+    const short = lib.shortfall($app, event, qty)
+    if (short) throw new BadRequestError(short)
     const price = { early: event.getFloat("price_early"), regular: event.getFloat("price_regular"), vip: event.getFloat("price_vip") }
     amount = lib.money(qty.early * price.early + qty.regular * price.regular + qty.vip * price.vip)
     if (!(amount > 0)) throw new BadRequestError("Free tickets don't need a card payment. Use your wallet instead.")

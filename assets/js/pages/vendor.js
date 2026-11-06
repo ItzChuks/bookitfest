@@ -9,6 +9,10 @@ const toLocalInput = (iso) => {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`
 }
 const EDIT_CATS = ['Music Festival', 'Tech Conference', 'Cultural Fair', 'Sports & Gaming']
+const TIERS = ['early', 'regular', 'vip']
+const TIER_SHORT = { early: 'Early Bird', regular: 'Regular', vip: 'VIP' }
+const qtyOf = (e, t) => Number(e['qty_' + t]) || 0
+const priceStr = (v) => String(+v.toFixed(2))
 
 export default {
   title: 'Vendor Dashboard',
@@ -40,9 +44,14 @@ export default {
             <button type="button" id="v-prev-x" class="absolute top-2 right-2 bg-black/60 hover:bg-black/80 text-white text-xs font-bold px-3 py-1.5 rounded-lg"><i class="fas fa-times mr-1"></i>Remove</button></div></div>
         <div><label class="block text-xs font-bold text-gray-700 mb-1" for="v-desc">Description</label><textarea class="field" id="v-desc" rows="3" maxlength="4000" placeholder="What should people know before they buy?"></textarea></div>
         <div class="bg-gray-50 p-4 sm:p-5 rounded-2xl border border-gray-200 space-y-4">
-          <div class="flex flex-wrap items-center justify-between gap-1"><h3 class="text-xs font-extrabold text-gray-900 uppercase tracking-wider">3-Tier Ticket Pricing (<span class="text-red-600" id="v-cur">${currencyLabel()}</span>)</h3><span class="text-[10px] text-gray-400 font-bold">Enter amounts in the selected currency</span></div>
-          <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">${[['early', 'Early Bird Pass', 30], ['regular', 'Regular Gate Pass', 60], ['vip', 'VIP Ultra Pass', 180]].map(([k, l, p]) => `<div class="bg-white p-4 rounded-xl border border-gray-200 space-y-1"><label for="v-p-${k}" class="text-[10px] text-gray-400 font-bold block uppercase">${l}</label>
-            <input type="number" min="0" step="any" inputmode="decimal" id="v-p-${k}" required data-ph="${p}" class="w-full p-2 border border-gray-200 rounded-lg text-base sm:text-sm font-black text-gray-900 focus:border-red-500 outline-none"></div>`).join('')}</div></div>
+          <div class="flex flex-wrap items-center justify-between gap-1"><h3 class="text-xs font-extrabold text-gray-900 uppercase tracking-wider">Ticket Tiers: Price & Quantity (<span class="text-red-600" id="v-cur">${currencyLabel()}</span>)</h3><span class="text-[10px] text-gray-400 font-bold">Prices are in the selected currency</span></div>
+          <p class="text-[11px] text-gray-500">Decide how many tickets you want to sell in each tier. Once a tier sells out, buyers can't purchase it any more. Enter 0 tickets to skip a tier.</p>
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">${[['early', 'Early Bird Pass', 30, 100], ['regular', 'Regular Gate Pass', 60, 300], ['vip', 'VIP Ultra Pass', 180, 30]].map(([k, l, p, q]) => `<div class="bg-white p-4 rounded-xl border border-gray-200 space-y-3"><span class="text-[10px] text-gray-900 font-extrabold block uppercase">${l}</span>
+            <div><label for="v-p-${k}" class="text-[10px] text-gray-400 font-bold block uppercase">Price</label>
+              <input type="number" min="0" step="any" inputmode="decimal" id="v-p-${k}" data-ph="${p}" class="w-full p-2 border border-gray-200 rounded-lg text-base sm:text-sm font-black text-gray-900 focus:border-red-500 outline-none"></div>
+            <div><label for="v-q-${k}" class="text-[10px] text-gray-400 font-bold block uppercase">Tickets to sell</label>
+              <input type="number" min="0" step="1" inputmode="numeric" id="v-q-${k}" required placeholder="e.g. ${q}" class="w-full p-2 border border-gray-200 rounded-lg text-base sm:text-sm font-black text-gray-900 focus:border-red-500 outline-none"></div></div>`).join('')}</div>
+          <p class="text-[11px] font-bold text-gray-500" id="v-total-qty"></p></div>
         <p id="v-err" class="hidden text-xs font-semibold text-red-600 bg-red-50 border border-red-200 rounded-xl px-3 py-2" role="alert"></p>
         <button type="submit" class="w-full bg-red-600 hover:bg-red-700 text-white font-extrabold py-4 rounded-2xl shadow-lg shadow-red-200 transition text-xs flex items-center justify-center space-x-2"><i class="fas fa-paper-plane"></i><span>Submit Event for Admin Approval</span></button></form></section>
 
@@ -65,11 +74,17 @@ export default {
       $('#v-across', root).innerHTML = `<i class="fas fa-ticket-alt mr-1"></i> Across ${new Set(tickets.map((t) => t.event)).size} event(s)`
       $('#v-balance', root).textContent = fmt(me()?.balance)
     }
+    const soldTier = (id, t) => tickets.filter((x) => x.event === id && x.tier === t).length
     const paintEvents = () => {
       const sold = (id) => tickets.filter((t) => t.event === id).length
+      const tierRow = (e) => TIERS.filter((t) => qtyOf(e, t) > 0).map((t) => {
+        const n = soldTier(e.id, t), cap = qtyOf(e, t), out = n >= cap
+        return `<span class="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-1 rounded-lg border ${out ? 'bg-red-50 border-red-100 text-red-600' : 'bg-gray-50 border-gray-200 text-gray-600'}">${TIER_SHORT[t]} ${n}/${cap}${out ? ' · sold out' : ''}</span>`
+      }).join('')
       $('#v-events', root).innerHTML = events.length ? events.map((e) => `<div class="border border-gray-200 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div class="min-w-0"><p class="font-bold text-sm text-gray-900 truncate">${esc(e.title)}</p><p class="text-[11px] text-gray-500">${esc(fmtDateTime(e.starts_at))} • ${esc(e.location)}</p>
-          <p class="mt-1.5 flex flex-wrap items-center gap-2">${badge(e.status)}<span class="text-[11px] text-gray-400 font-semibold">${sold(e.id)} sold • from ${fmt(e.price_early)}</span></p></div>
+          <p class="mt-1.5 flex flex-wrap items-center gap-2">${badge(e.status)}<span class="text-[11px] text-gray-400 font-semibold">${sold(e.id)} sold</span></p>
+          <p class="mt-2 flex flex-wrap gap-1.5">${tierRow(e) || '<span class="text-[11px] text-gray-400">No tickets offered yet. Edit this event to add some.</span>'}</p></div>
         <div class="flex gap-2 shrink-0">${e.status === 'approved' ? `<a href="event.html?id=${esc(e.id)}" class="text-xs font-bold text-red-600 border border-red-200 hover:bg-red-50 px-3 py-2 rounded-xl">View</a>` : ''}
           <button data-edit="${esc(e.id)}" class="text-xs font-bold text-gray-700 border border-gray-200 hover:border-red-300 hover:text-red-600 px-3 py-2 rounded-xl"><i class="fas fa-pen mr-1"></i>Edit</button>
           ${e.status === 'pending' ? `<button data-del="${esc(e.id)}" class="text-xs font-bold text-gray-500 border border-gray-200 hover:border-red-300 hover:text-red-600 px-3 py-2 rounded-xl">Delete</button>` : ''}</div></div>`).join('')
@@ -79,12 +94,17 @@ export default {
       try {
         ;[events, tickets] = await Promise.all([
           pb.collection('events').getFullList({ filter: pb.filter('vendor = {:u}', { u: me().id }), sort: '-created' }),
-          pb.collection('tickets').getFullList({ filter: pb.filter('event.vendor = {:u}', { u: me().id }), fields: 'id,event,price' }),
+          pb.collection('tickets').getFullList({ filter: pb.filter('event.vendor = {:u}', { u: me().id }), fields: 'id,event,price,tier' }),
         ])
       } catch (e) { toast(errMsg(e), 'error') }
       paintStats(); paintEvents()
     }
 
+    const paintTotalQty = () => {
+      const n = TIERS.reduce((a, t) => a + (Math.floor(Number($(`#v-q-${t}`, root).value)) || 0), 0)
+      $('#v-total-qty', root).textContent = n ? `${n.toLocaleString()} ticket${n === 1 ? '' : 's'} in total across all tiers` : ''
+    }
+    TIERS.forEach((t) => ($(`#v-q-${t}`, root).oninput = paintTotalQty))
     const form = $('#v-form', root)
     const imgIn = $('#v-img', root), prev = $('#v-prev', root), prevImg = $('#v-prev-img', root), drop = $('#v-drop', root)
     const clearImg = () => { imgIn.value = ''; if (prevImg.src.startsWith('blob:')) URL.revokeObjectURL(prevImg.src); prevImg.removeAttribute('src'); prev.classList.add('hidden'); drop.classList.remove('hidden') }
@@ -100,22 +120,28 @@ export default {
     form.onsubmit = async (ev) => {
       ev.preventDefault()
       const err = $('#v-err', root); err.classList.add('hidden')
-      const prices = ['early', 'regular', 'vip'].map((k) => toUSD($(`#v-p-${k}`, root).value))
-      if (prices.some((p) => !(p >= 0))) { err.textContent = 'Enter a price for every tier (use 0 for free).'; return err.classList.remove('hidden') }
+      const qtys = TIERS.map((k) => Number($(`#v-q-${k}`, root).value))
+      if (qtys.some((q) => !Number.isInteger(q) || q < 0)) { err.textContent = 'Enter how many tickets to sell in each tier (whole numbers, 0 to skip a tier).'; return err.classList.remove('hidden') }
+      if (!qtys.some((q) => q > 0)) { err.textContent = 'Offer at least one ticket in one of the tiers.'; return err.classList.remove('hidden') }
+      const raw = TIERS.map((k) => $(`#v-p-${k}`, root).value.trim())
+      const prices = raw.map((v) => (v === '' ? 0 : toUSD(v)))
+      const badPrice = TIERS.findIndex((k, i) => qtys[i] > 0 && (raw[i] === '' || !(prices[i] >= 0)))
+      if (badPrice >= 0 || prices.some((p) => !(p >= 0))) { err.textContent = `Enter a price for the ${TIER_SHORT[TIERS[Math.max(badPrice, 0)]]} tier (use 0 for free).`; return err.classList.remove('hidden') }
       const when = new Date($('#v-date', root).value)
       if (!(when > new Date())) { err.textContent = 'Pick a date and time in the future.'; return err.classList.remove('hidden') }
       const btn = $('button[type=submit]', form); setBusy(btn, true, 'Submitting…')
       try {
         const fd = new FormData()
-        const price = (v) => String(+v.toFixed(2))
+        const price = priceStr
         Object.entries({
           title: $('#v-title', root).value.trim(), category: $('#v-cat', root).value, starts_at: when.toISOString().replace('T', ' '),
           location: $('#v-loc', root).value.trim(), description: $('#v-desc', root).value.trim(),
           vendor: me().id, status: 'pending', price_early: price(prices[0]), price_regular: price(prices[1]), price_vip: price(prices[2]),
+          qty_early: String(qtys[0]), qty_regular: String(qtys[1]), qty_vip: String(qtys[2]),
         }).forEach(([k, v]) => fd.append(k, v))
         if (imgIn.files[0]) fd.append('image', imgIn.files[0])
         await pb.collection('events').create(fd)
-        form.reset(); toast('Event submitted. It is now pending admin approval.'); bus.emit('pending'); load()
+        form.reset(); paintTotalQty(); toast('Event submitted. It is now pending admin approval.'); bus.emit('pending'); load()
       } catch (e) { err.textContent = errMsg(e); err.classList.remove('hidden') }
       setBusy(btn, false)
     }
@@ -150,9 +176,14 @@ export default {
           <input type="file" id="e-img" accept="image/jpeg,image/png,image/webp,image/gif" class="block w-full text-xs text-gray-500 file:mr-3 file:rounded-lg file:border-0 file:bg-red-50 file:px-3 file:py-2 file:text-xs file:font-bold file:text-red-600">
           <p class="text-[11px] text-gray-400 mt-1">Leave empty to keep the current image. Max 5 MB.</p></div>
         <div><label class="block text-xs font-bold text-gray-700 mb-1" for="e-desc">Description</label><textarea class="field" id="e-desc" rows="3" maxlength="4000">${esc(ev.description || '')}</textarea></div>
-        <div class="bg-gray-50 p-3 rounded-2xl border border-gray-200 space-y-2"><p class="text-[10px] font-extrabold text-gray-900 uppercase tracking-wider">Ticket prices (${esc(currencyLabel())})</p>
-          <div class="grid grid-cols-3 gap-2">${[['early', 'Early Bird'], ['regular', 'Regular'], ['vip', 'VIP']].map(([k, l]) => `<div><label for="e-p-${k}" class="text-[10px] text-gray-400 font-bold block uppercase">${l}</label>
-            <input type="number" min="0" step="any" inputmode="decimal" id="e-p-${k}" required value="${fromUSD(ev['price_' + k])}" class="${input}"></div>`).join('')}</div></div>
+        <div class="bg-gray-50 p-3 rounded-2xl border border-gray-200 space-y-3"><p class="text-[10px] font-extrabold text-gray-900 uppercase tracking-wider">Ticket tiers (prices in ${esc(currencyLabel())})</p>
+          <div class="grid grid-cols-3 gap-2">${TIERS.map((k) => { const n = soldTier(ev.id, k); return `<div class="space-y-2"><span class="text-[10px] text-gray-900 font-extrabold block uppercase">${TIER_SHORT[k]}</span>
+            <div><label for="e-p-${k}" class="text-[10px] text-gray-400 font-bold block uppercase">Price</label>
+              <input type="number" min="0" step="any" inputmode="decimal" id="e-p-${k}" value="${fromUSD(ev['price_' + k])}" class="${input}"></div>
+            <div><label for="e-q-${k}" class="text-[10px] text-gray-400 font-bold block uppercase">Tickets</label>
+              <input type="number" min="${n}" step="1" inputmode="numeric" id="e-q-${k}" required value="${qtyOf(ev, k)}" class="${input}"></div>
+            <p class="text-[10px] text-gray-400 font-semibold">${n} sold${n ? ' (minimum)' : ''}</p></div>` }).join('')}</div>
+          <p class="text-[11px] text-gray-500">You can raise the number of tickets any time, but never below what is already sold. Set a tier to 0 to stop offering it.</p></div>
         <p id="e-err" class="hidden text-xs font-semibold text-red-600 bg-red-50 border border-red-200 rounded-xl px-3 py-2" role="alert"></p>
         <div class="flex gap-3"><button type="button" data-close class="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold py-3 rounded-xl text-xs">Cancel</button>
           <button type="submit" class="flex-1 bg-red-600 hover:bg-red-700 text-white font-bold py-3 rounded-xl text-xs flex items-center justify-center gap-2"><i class="fas fa-save"></i><span>Save changes</span></button></div></form>`, { wide: true })
@@ -166,8 +197,15 @@ export default {
       }
       f.onsubmit = async (x) => {
         x.preventDefault(); err.classList.add('hidden')
-        const prices = ['early', 'regular', 'vip'].map((k) => toUSD($(`#e-p-${k}`, m.el).value))
-        if (prices.some((p) => !(p >= 0))) return fail('Enter a price for every tier (use 0 for free).')
+        const qtys = TIERS.map((k) => Number($(`#e-q-${k}`, m.el).value))
+        if (qtys.some((q) => !Number.isInteger(q) || q < 0)) return fail('Enter how many tickets to sell in each tier (whole numbers, 0 to stop offering a tier).')
+        const low = TIERS.findIndex((k, i) => qtys[i] < soldTier(ev.id, k))
+        if (low >= 0) return fail(`${soldTier(ev.id, TIERS[low])} ${TIER_SHORT[TIERS[low]]} tickets are already sold, so you can't offer fewer than that.`)
+        if (!qtys.some((q) => q > 0)) return fail('Offer at least one ticket in one of the tiers.')
+        const raw = TIERS.map((k) => $(`#e-p-${k}`, m.el).value.trim())
+        const prices = raw.map((v) => (v === '' ? 0 : toUSD(v)))
+        const badPrice = TIERS.findIndex((k, i) => qtys[i] > 0 && (raw[i] === '' || !(prices[i] >= 0)))
+        if (badPrice >= 0 || prices.some((p) => !(p >= 0))) return fail(`Enter a price for the ${TIER_SHORT[TIERS[Math.max(badPrice, 0)]]} tier (use 0 for free).`)
         const when = new Date($('#e-date', m.el).value)
         if (isNaN(when)) return fail('Pick a valid date and time.')
         const dateChanged = when.getTime() !== new Date(ev.starts_at.replace(' ', 'T')).getTime()
@@ -178,6 +216,7 @@ export default {
           Object.entries({
             title: $('#e-title', m.el).value.trim(), category: $('#e-cat', m.el).value, location: $('#e-loc', m.el).value.trim(),
             description: $('#e-desc', m.el).value.trim(), price_early: price(prices[0]), price_regular: price(prices[1]), price_vip: price(prices[2]),
+            qty_early: String(qtys[0]), qty_regular: String(qtys[1]), qty_vip: String(qtys[2]),
           }).forEach(([k, v]) => fd.append(k, v))
           if (dateChanged) fd.append('starts_at', when.toISOString().replace('T', ' '))
           if (ev.status === 'rejected') fd.append('status', 'pending')
